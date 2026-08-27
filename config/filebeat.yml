@@ -1,0 +1,24 @@
+filebeat.inputs:
+  - type: filestream
+    id: linux-system-logs
+    paths:
+      - /var/log/auth.log
+      - /var/log/syslog
+    fields:
+      source_type: linux_sshd
+    fields_under_root: true
+
+processors:
+  - add_host_metadata: ~
+
+output.http:
+  hosts: ["http://backend:8080"]
+  path: "/api/v1/ingest"
+  method: POST
+  headers:
+    Content-Type: application/json
+  codec.json:
+    pretty: false
+
+# Deploy beside Filebeat and map the event fields to the bridge payload:
+# message, source_type, host.name, and agent.id.

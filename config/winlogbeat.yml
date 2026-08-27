@@ -1,0 +1,23 @@
+winlogbeat.event_logs:
+  - name: Security
+    ignore_older: 72h
+  - name: System
+    ignore_older: 72h
+
+processors:
+  - add_host_metadata: ~
+  - add_fields:
+      target: ""
+      fields:
+        source_type: windows_eventlog
+
+output.http:
+  hosts: ["http://backend:8080"]
+  path: "/api/v1/ingest"
+  method: POST
+  headers:
+    Content-Type: application/json
+  codec.json:
+    pretty: false
+
+# Deploy on the Windows host. The HTTP bridge writes each event to Redis Stream.
