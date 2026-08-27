@@ -72,6 +72,16 @@ services:
       timeout: 3s
       retries: 20
 
+  logstash:
+    image: docker.elastic.co/logstash/logstash:9.5.2
+    volumes:
+      - ./config/logstash-pipeline.conf:/usr/share/logstash/pipeline/logstash.conf:ro
+    ports:
+      - "${BEATS_PORT:-5044}:5044"
+    depends_on:
+      backend:
+        condition: service_healthy
+
   ingest:
     build: ./backend
     entrypoint: ["/siem-ingest"]

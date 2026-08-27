@@ -11,14 +11,8 @@ filebeat.inputs:
 processors:
   - add_host_metadata: ~
 
-output.http:
-  hosts: ["http://backend:8080"]
-  path: "/api/v1/ingest"
-  method: POST
-  headers:
-    Content-Type: application/json
-  codec.json:
-    pretty: false
+output.logstash:
+  hosts: ["${SIEM_BEATS_HOST:localhost}:5044"]
 
-# Deploy beside Filebeat and map the event fields to the bridge payload:
-# message, source_type, host.name, and agent.id.
+# Filebeat does not support output.http. Logstash receives Beats events on
+# port 5044 and forwards them to the SIEM HTTP ingest endpoint.

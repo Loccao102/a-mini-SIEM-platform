@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/auth"
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/ingest"
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/storage"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -28,7 +30,9 @@ func (handler *Handler) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/v1/auth/login", handler.login)
 	mux.HandleFunc("POST /api/v1/ingest", handler.ingestLog)
+	mux.Handle("GET /api/v1/summary", handler.requireRole("viewer", http.HandlerFunc(handler.summary)))
 	mux.Handle("GET /api/v1/events", handler.requireRole("viewer", http.HandlerFunc(handler.events)))
+	mux.Handle("GET /api/v1/assets", handler.requireRole("viewer", http.HandlerFunc(handler.assets)))
 	mux.Handle("/api/v1/rules", handler.requireRole("viewer", http.HandlerFunc(handler.rulesRoute)))
 	mux.Handle("/api/v1/rules/{id}", handler.requireRole("viewer", http.HandlerFunc(handler.rulesRoute)))
 	mux.Handle("/api/v1/alerts", handler.requireRole("viewer", http.HandlerFunc(handler.alertsRoute)))
@@ -44,6 +48,7 @@ func (handler *Handler) login(response http.ResponseWriter, request *http.Reques
 		writeError(response, http.StatusBadRequest, fmt.Errorf("email and password are required"))
 		return
 	}
+	payload.Email = strings.TrimSpace(payload.Email)
 	var id int64
 	var email, hash, role string
 	var enabled bool
@@ -129,12 +134,38 @@ func (handler *Handler) ingestLog(response http.ResponseWriter, request *http.Re
 	if payload.AgentID == "" {
 		payload.AgentID = payload.Agent.ID
 	}
+	if err := handler.upsertAsset(request, payload.Hostname, payload.SourceType, payload.AgentID); err != nil {
+		writeError(response, http.StatusInternalServerError, err)
+		return
+	}
 	id, err := handler.ingest.Publish(request.Context(), ingest.Message{Raw: payload.Message, SourceType: payload.SourceType, Hostname: payload.Hostname, AgentID: payload.AgentID, ReceivedAt: time.Now()})
 	if err != nil {
 		writeError(response, http.StatusBadGateway, err)
 		return
 	}
 	writeJSON(response, http.StatusAccepted, map[string]string{"stream_id": id})
+}
+
+func (handler *Handler) upsertAsset(request *http.Request, hostname, sourceType, agentID string) error {
+	var assetID int64
+	err := handler.postgres.QueryRow(request.Context(), `SELECT asset_id FROM assets WHERE hostname=$1`, hostname).Scan(&assetID)
+	if err == nil {
+		result, err := handler.postgres.Exec(request.Context(), `UPDATE log_sources SET status='active', agent_id=$1, last_seen=now() WHERE asset_id=$2 AND source_type=$3`, agentID, assetID, sourceType)
+		if err != nil || result.RowsAffected() > 0 {
+			return err
+		}
+		_, err = handler.postgres.Exec(request.Context(), `INSERT INTO log_sources (asset_id, source_type, agent_id, status, last_seen) VALUES ($1, $2, $3, 'active', now())`, assetID, sourceType, agentID)
+		return err
+	}
+	if err != pgx.ErrNoRows {
+		return err
+	}
+	err = handler.postgres.QueryRow(request.Context(), `INSERT INTO assets (hostname, os_type) VALUES ($1, $2) RETURNING asset_id`, hostname, sourceType).Scan(&assetID)
+	if err != nil {
+		return err
+	}
+	_, err = handler.postgres.Exec(request.Context(), `INSERT INTO log_sources (asset_id, source_type, agent_id, status, last_seen) VALUES ($1, $2, $3, 'active', now())`, assetID, sourceType, agentID)
+	return err
 }
 
 func (handler *Handler) events(response http.ResponseWriter, request *http.Request) {
@@ -145,6 +176,50 @@ func (handler *Handler) events(response http.ResponseWriter, request *http.Reque
 	result, err := handler.elastic.Search(request.Context(), map[string]any{"size": limit, "sort": []any{map[string]any{"event_time": "desc"}}, "query": map[string]any{"match_all": map[string]any{}}})
 	if err != nil {
 		writeError(response, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (handler *Handler) summary(response http.ResponseWriter, request *http.Request) {
+	var openAlerts, assets int64
+	if err := handler.postgres.QueryRow(request.Context(), `SELECT COUNT(*) FROM alerts WHERE status = 'open'`).Scan(&openAlerts); err != nil {
+		writeError(response, http.StatusInternalServerError, err)
+		return
+	}
+	if err := handler.postgres.QueryRow(request.Context(), `SELECT COUNT(*) FROM assets`).Scan(&assets); err != nil {
+		writeError(response, http.StatusInternalServerError, err)
+		return
+	}
+	events, err := handler.elastic.Count(request.Context())
+	if err != nil {
+		writeError(response, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]int64{"open_alerts": openAlerts, "events_processed": events, "connected_assets": assets})
+}
+
+func (handler *Handler) assets(response http.ResponseWriter, request *http.Request) {
+	rows, err := handler.postgres.Query(request.Context(), `SELECT asset_id, hostname, ip_address, os_type, criticality, owner, created_at FROM assets ORDER BY hostname`)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, err)
+		return
+	}
+	defer rows.Close()
+	result := make([]map[string]any, 0)
+	for rows.Next() {
+		var id int64
+		var hostname, ipAddress, osType, criticality string
+		var owner *string
+		var createdAt any
+		if err := rows.Scan(&id, &hostname, &ipAddress, &osType, &criticality, &owner, &createdAt); err != nil {
+			writeError(response, http.StatusInternalServerError, err)
+			return
+		}
+		result = append(result, map[string]any{"asset_id": id, "hostname": hostname, "ip_address": ipAddress, "os_type": osType, "criticality": criticality, "owner": owner, "created_at": createdAt})
+	}
+	if err := rows.Err(); err != nil {
+		writeError(response, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(response, http.StatusOK, result)
@@ -200,6 +275,8 @@ func (handler *Handler) alerts(response http.ResponseWriter, request *http.Reque
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set("Access-Control-Allow-Origin", "*")
+		response.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		response.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 		if request.Method == http.MethodOptions {
 			response.WriteHeader(http.StatusNoContent)
 			return

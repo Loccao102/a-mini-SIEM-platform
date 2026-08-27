@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/auth"
 )
@@ -14,19 +15,41 @@ func (handler *Handler) rulesRoute(response http.ResponseWriter, request *http.R
 		handler.rules(response, request)
 		return
 	}
-	claims := handler.claims(request)
-	if claims.Role != "admin" {
-		writeError(response, http.StatusForbidden, fmt.Errorf("admin role is required"))
-		return
-	}
 	id, _ := strconv.ParseInt(request.PathValue("id"), 10, 64)
-	if request.Method == http.MethodDelete && id > 0 {
+	if request.Method == http.MethodDelete {
+		if id <= 0 {
+			writeError(response, http.StatusBadRequest, fmt.Errorf("rule id is required"))
+			return
+		}
+		claims := handler.claims(request)
+		if claims.Role != "admin" {
+			writeError(response, http.StatusForbidden, fmt.Errorf("admin role is required"))
+			return
+		}
 		_, err := handler.postgres.Exec(request.Context(), `DELETE FROM rules WHERE rule_id=$1`, id)
 		if err != nil {
-			writeError(response, 500, err)
+			writeError(response, http.StatusInternalServerError, err)
 			return
 		}
 		response.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if request.Method != http.MethodPost && request.Method != http.MethodPut {
+		response.Header().Set("Allow", "GET, POST, PUT, DELETE")
+		writeError(response, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
+		return
+	}
+	if request.Method == http.MethodPut && id <= 0 {
+		writeError(response, http.StatusBadRequest, fmt.Errorf("rule id is required for update"))
+		return
+	}
+	if request.Method == http.MethodPost && id > 0 {
+		writeError(response, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
+		return
+	}
+	claims := handler.claims(request)
+	if claims.Role != "admin" {
+		writeError(response, http.StatusForbidden, fmt.Errorf("admin role is required"))
 		return
 	}
 	var payload struct {
@@ -66,13 +89,18 @@ func (handler *Handler) alertsRoute(response http.ResponseWriter, request *http.
 		handler.alerts(response, request)
 		return
 	}
+	if request.Method != http.MethodPatch {
+		response.Header().Set("Allow", "GET, PATCH")
+		writeError(response, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
+		return
+	}
 	claims := handler.claims(request)
 	if !allowed(claims.Role, "analyst") {
 		writeError(response, 403, fmt.Errorf("analyst role is required"))
 		return
 	}
 	id, err := strconv.ParseInt(request.PathValue("id"), 10, 64)
-	if err != nil {
+	if err != nil || id <= 0 {
 		writeError(response, 400, fmt.Errorf("invalid alert id"))
 		return
 	}
@@ -112,8 +140,17 @@ func (handler *Handler) usersRoute(response http.ResponseWriter, request *http.R
 		writeJSON(response, 200, result)
 		return
 	}
+	if request.Method != http.MethodPost && request.Method != http.MethodDelete {
+		response.Header().Set("Allow", "GET, POST, DELETE")
+		writeError(response, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
+		return
+	}
 	if request.Method == http.MethodDelete {
 		id, _ := strconv.ParseInt(request.PathValue("id"), 10, 64)
+		if id <= 0 {
+			writeError(response, http.StatusBadRequest, fmt.Errorf("user id is required"))
+			return
+		}
 		_, err := handler.postgres.Exec(request.Context(), `UPDATE users SET enabled=false, updated_at=now() WHERE user_id=$1`, id)
 		if err != nil {
 			writeError(response, 500, err)
@@ -123,10 +160,11 @@ func (handler *Handler) usersRoute(response http.ResponseWriter, request *http.R
 		return
 	}
 	var payload struct{ Email, Password, DisplayName, Role string }
-	if json.NewDecoder(request.Body).Decode(&payload) != nil || payload.Email == "" || payload.Role == "" {
+	if json.NewDecoder(request.Body).Decode(&payload) != nil || strings.TrimSpace(payload.Email) == "" || payload.Role == "" {
 		writeError(response, 400, fmt.Errorf("email and role are required"))
 		return
 	}
+	payload.Email = strings.ToLower(strings.TrimSpace(payload.Email))
 	if payload.Role != "admin" && payload.Role != "analyst" && payload.Role != "viewer" {
 		writeError(response, 400, fmt.Errorf("invalid role"))
 		return

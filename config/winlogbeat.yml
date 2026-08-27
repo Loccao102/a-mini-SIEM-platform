@@ -11,13 +11,8 @@ processors:
       fields:
         source_type: windows_eventlog
 
-output.http:
-  hosts: ["http://backend:8080"]
-  path: "/api/v1/ingest"
-  method: POST
-  headers:
-    Content-Type: application/json
-  codec.json:
-    pretty: false
+output.logstash:
+  hosts: ["${SIEM_BEATS_HOST:localhost}:5044"]
 
-# Deploy on the Windows host. The HTTP bridge writes each event to Redis Stream.
+# Winlogbeat does not support output.http. Logstash receives Beats events on
+# port 5044 and forwards them to the SIEM HTTP ingest endpoint.

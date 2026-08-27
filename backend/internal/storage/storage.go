@@ -34,6 +34,24 @@ type Elasticsearch struct {
 	client  *http.Client
 }
 
+func (elastic *Elasticsearch) Count(ctx context.Context) (int64, error) {
+	result, err := elastic.Search(ctx, map[string]any{"size": 0, "track_total_hits": true, "query": map[string]any{"match_all": map[string]any{}}})
+	if err != nil {
+		return 0, err
+	}
+	var payload struct {
+		Hits struct {
+			Total struct {
+				Value int64 `json:"value"`
+			} `json:"total"`
+		} `json:"hits"`
+	}
+	if err := json.Unmarshal(result, &payload); err != nil {
+		return 0, err
+	}
+	return payload.Hits.Total.Value, nil
+}
+
 func (elastic *Elasticsearch) Search(ctx context.Context, query map[string]any) (json.RawMessage, error) {
 	payload, err := json.Marshal(query)
 	if err != nil {

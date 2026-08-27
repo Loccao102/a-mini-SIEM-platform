@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { RouteGuard } from "@/components/auth-gate";
 
 export const metadata: Metadata = {
   title: "Sentinel | Security overview",
@@ -9,7 +10,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="en">
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col"><RouteGuard>{children}</RouteGuard></body>
     </html>
   );
 }
