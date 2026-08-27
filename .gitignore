@@ -1,0 +1,16 @@
+# Environment
+.env
+.env.*
+!.env.example
+
+# Go
+backend/bin/
+backend/vendor/
+
+# Node
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+
+# OS
+.DS_Store
