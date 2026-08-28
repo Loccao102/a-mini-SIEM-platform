@@ -22,8 +22,8 @@ func (handler *Handler) rulesRoute(response http.ResponseWriter, request *http.R
 			return
 		}
 		claims := handler.claims(request)
-		if claims.Role != "admin" {
-			writeError(response, http.StatusForbidden, fmt.Errorf("admin role is required"))
+		if !allowed(claims.Role, "analyst") {
+			writeError(response, http.StatusForbidden, fmt.Errorf("analyst or admin role is required"))
 			return
 		}
 		_, err := handler.postgres.Exec(request.Context(), `DELETE FROM rules WHERE rule_id=$1`, id)
@@ -48,14 +48,19 @@ func (handler *Handler) rulesRoute(response http.ResponseWriter, request *http.R
 		return
 	}
 	claims := handler.claims(request)
-	if claims.Role != "admin" {
-		writeError(response, http.StatusForbidden, fmt.Errorf("admin role is required"))
+	if !allowed(claims.Role, "analyst") {
+		writeError(response, http.StatusForbidden, fmt.Errorf("analyst or admin role is required"))
 		return
 	}
 	var payload struct {
-		Name, Description, RegexPattern, TargetField, Severity, Category string
-		Condition                                                        map[string]any
-		Enabled                                                          *bool
+		Name         string         `json:"name"`
+		Description  string         `json:"description"`
+		RegexPattern string         `json:"regex_pattern"`
+		TargetField  string         `json:"target_field"`
+		Severity     string         `json:"severity"`
+		Category     string         `json:"category"`
+		Condition    map[string]any `json:"condition"`
+		Enabled      *bool          `json:"enabled"`
 	}
 	if json.NewDecoder(request.Body).Decode(&payload) != nil || payload.Name == "" || payload.RegexPattern == "" || payload.TargetField == "" {
 		writeError(response, 400, fmt.Errorf("name, regex_pattern and target_field are required"))

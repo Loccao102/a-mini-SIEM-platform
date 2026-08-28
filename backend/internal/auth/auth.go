@@ -25,8 +25,8 @@ type Manager struct{ secret []byte }
 func NewManager(secret string) *Manager { return &Manager{secret: []byte(secret)} }
 
 func HashPassword(password string) (string, error) {
-	if len(password) < 8 {
-		return "", errors.New("password must be at least 8 characters")
+	if len(password) < 4 {
+		return "", errors.New("password must be at least 4 characters")
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	return string(hash), err

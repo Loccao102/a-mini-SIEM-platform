@@ -1,16 +1,22 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { RouteGuard } from "@/components/auth-gate";
+import { NavHeader } from "@/components/nav-header";
 
 export const metadata: Metadata = {
-  title: "Sentinel | Security overview",
+  title: "Sentinel | Security Command Center",
   description: "A mini SIEM command center",
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body className="min-h-full flex flex-col"><RouteGuard>{children}</RouteGuard></body>
+      <body className="min-h-full flex flex-col">
+        <RouteGuard>
+          <NavHeader />
+          {children}
+        </RouteGuard>
+      </body>
     </html>
   );
 }

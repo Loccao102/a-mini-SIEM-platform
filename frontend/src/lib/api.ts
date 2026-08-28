@@ -9,6 +9,9 @@ export type Alert = {
   rule_id: number;
   asset_id: number | null;
   triggered_at: string;
+  last_seen?: string;
+  occurrences?: number;
+  entity_key?: string;
   severity: string;
   status: string;
   assigned_to: string | null;
@@ -23,12 +26,43 @@ export type EventRecord = {
   event_type?: string;
   severity?: string;
   source_type?: string;
+  log_category?: string;
+  src_ip?: string;
+  username?: string;
+  duplicate_count?: number;
+  extra_fields?: Record<string, string>;
   [key: string]: unknown;
 };
 
-export type Rule = { rule_id: number; name: string; description: string | null; regex_pattern: string; target_field: string; severity: string; category: string; enabled: boolean; condition: Record<string, unknown> };
-export type Asset = { asset_id: number; hostname: string; ip_address: string; os_type: string; criticality: string; owner: string | null; created_at: string };
-export type User = { user_id: number; email: string; display_name: string; role: "admin" | "analyst" | "viewer"; enabled: boolean };
+export type Rule = {
+  rule_id: number;
+  name: string;
+  description: string | null;
+  regex_pattern: string;
+  target_field: string;
+  severity: string;
+  category: string;
+  enabled: boolean;
+  condition: Record<string, unknown>;
+};
+
+export type Asset = {
+  asset_id: number;
+  hostname: string;
+  ip_address: string;
+  os_type: string;
+  criticality: string;
+  owner: string | null;
+  created_at: string;
+};
+
+export type User = {
+  user_id: number;
+  email: string;
+  display_name: string;
+  role: "admin" | "analyst" | "viewer";
+  enabled: boolean;
+};
 
 export class ApiError extends Error {
   constructor(public readonly status: number, message: string) {
@@ -53,9 +87,10 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     payload = undefined;
   }
   if (!response.ok) {
-    const message = typeof payload === "object" && payload !== null && "error" in payload && typeof payload.error === "string"
-      ? payload.error
-      : `Request failed with status ${response.status}`;
+    const message =
+      typeof payload === "object" && payload !== null && "error" in payload && typeof payload.error === "string"
+        ? payload.error
+        : `Request failed with status ${response.status}`;
     throw new ApiError(response.status, message);
   }
   return payload as T;
@@ -82,21 +117,92 @@ export async function getEvents(limit = 100) {
   return payload.hits?.hits?.map((hit) => hit._source ?? {}) ?? [];
 }
 
-export function getRules() { return request<Rule[]>("/api/v1/rules"); }
-export function getAssets() { return request<Asset[]>("/api/v1/assets"); }
-
-export function createRule(rule: Omit<Rule, "rule_id" | "description" | "condition"> & { description?: string; condition?: Record<string, unknown> }) {
-  return request<{ rule_id: number }>("/api/v1/rules", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(rule) });
+export function getRules() {
+  return request<Rule[]>("/api/v1/rules");
 }
 
-export function deleteRule(id: number) { return request<void>(`/api/v1/rules/${id}`, { method: "DELETE" }); }
+export function getAssets() {
+  return request<Asset[]>("/api/v1/assets");
+}
+
+export function createRule(
+  rule: Omit<Rule, "rule_id" | "description" | "condition"> & {
+    description?: string;
+    condition?: Record<string, unknown>;
+  }
+) {
+  return request<{ rule_id: number }>("/api/v1/rules", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(rule),
+  });
+}
+
+export function deleteRule(id: number) {
+  return request<void>(`/api/v1/rules/${id}`, { method: "DELETE" });
+}
 
 export function login(email: string, password: string) {
-  return request<{ token: string; user: User }>("/api/v1/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password }) });
+  return request<{ token: string; user: User }>("/api/v1/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
 }
 
-export function getUsers() { return request<User[]>("/api/v1/users"); }
-export function createUser(user: { email: string; password: string; display_name: string; role: User["role"] }) {
-  return request<User>("/api/v1/users", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(user) });
+export function getMe() {
+  return request<User>("/api/v1/auth/me");
 }
-export function disableUser(id: number) { return request<void>(`/api/v1/users/${id}`, { method: "DELETE" }); }
+
+export function getUsers() {
+  return request<User[]>("/api/v1/users");
+}
+
+export function createUser(user: { email: string; password: string; display_name: string; role: User["role"] }) {
+  return request<User>("/api/v1/users", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(user),
+  });
+}
+
+export function disableUser(id: number) {
+  return request<void>(`/api/v1/users/${id}`, { method: "DELETE" });
+}
+
+export function testRegex(pattern: string, log: string, target_field = "message") {
+  return request<{ matched: boolean; groups: string[]; pattern: string }>("/api/v1/rules/test-regex", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pattern, log, target_field }),
+  });
+}
+
+export function ingestLog(message: string, sourceType = "generic", hostname = "web-01") {
+  return request<{ stream_id: string }>("/api/v1/ingest", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message, source_type: sourceType, hostname }),
+  });
+}
+
+export type AnalyticsData = {
+  total_events: number;
+  events_by_severity: Record<string, number>;
+  events_by_category: Record<string, number>;
+  top_attacking_ips: Array<{
+    ip: string;
+    count: number;
+    country: string;
+    country_code: string;
+    threat_level: string;
+    threat_category?: string;
+    reputation_score?: number;
+  }>;
+  top_targeted_users: Array<{ username: string; count: number }>;
+  timeline: Array<{ time: string; count: number }>;
+};
+
+export function getAnalytics() {
+  return request<AnalyticsData>("/api/v1/analytics");
+}

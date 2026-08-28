@@ -57,3 +57,46 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 	.user-row > span:last-of-type { display: none; }
 	.disable { grid-column: 2; grid-row: 1; text-align: right; }
 }
+
+/* NavHeader Styling */
+.siem-nav-header { display: flex; align-items: center; justify-content: space-between; padding: 14px clamp(22px, 5vw, 76px); border-bottom: 1px solid var(--line); background: rgba(13, 18, 19, 0.94); backdrop-filter: blur(14px); position: sticky; top: 0; z-index: 100; }
+.nav-brand { display: flex; align-items: center; gap: 16px; }
+.logo-box { display: flex; align-items: center; gap: 8px; text-decoration: none; }
+.version { font: 10px var(--mono); color: var(--muted); background: var(--surface); padding: 2px 6px; border-radius: 2px; }
+.status-pill { font: 10px var(--mono); color: var(--acid); display: flex; align-items: center; gap: 6px; text-transform: uppercase; }
+.pulse-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--acid); box-shadow: 0 0 10px var(--acid); }
+.nav-links { display: flex; gap: 24px; font: 11px var(--mono); text-transform: uppercase; letter-spacing: 0.08em; }
+.nav-links a { color: var(--muted); text-decoration: none; padding-bottom: 4px; }
+.nav-links a:hover, .nav-links a.active { color: var(--acid); border-bottom: 1px solid var(--acid); }
+.nav-user { display: flex; align-items: center; gap: 14px; }
+.user-info { display: flex; flex-direction: column; align-items: flex-end; }
+.user-name { font-size: 13px; font-weight: 500; color: var(--ink); }
+.role-badge { font: 9px var(--mono); padding: 2px 6px; border-radius: 2px; text-transform: uppercase; font-weight: 700; margin-top: 2px; }
+.badge-admin { background: rgba(255, 120, 107, 0.2); color: var(--coral); border: 1px solid var(--coral); }
+.badge-analyst { background: rgba(242, 179, 94, 0.2); color: var(--amber); border: 1px solid var(--amber); }
+.badge-viewer { background: rgba(199, 243, 107, 0.2); color: var(--acid); border: 1px solid var(--acid); }
+.btn-signout, .btn-signin { padding: 6px 12px; font: 10px var(--mono); text-transform: uppercase; border-radius: 2px; cursor: pointer; text-decoration: none; }
+.btn-signout { border: 1px solid var(--line); background: var(--surface); color: var(--muted); }
+.btn-signout:hover { border-color: var(--coral); color: var(--coral); }
+.btn-signin { border: 1px solid var(--acid); background: var(--acid); color: var(--canvas); }
+
+/* Sandbox & Presets */
+.presets-group { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 20px; }
+.btn-preset { padding: 6px 10px; font: 10px var(--mono); background: var(--surface); border: 1px solid var(--line); color: var(--ink); border-radius: 2px; cursor: pointer; }
+.btn-preset:hover { border-color: var(--acid); color: var(--acid); }
+.sandbox-box { background: var(--surface); border: 1px solid var(--line); padding: 20px; border-radius: 4px; margin-top: 24px; }
+.sandbox-title { font-size: 16px; font-weight: 500; margin: 0 0 12px; color: var(--aqua); }
+.match-badge { display: inline-block; padding: 4px 8px; font: 10px var(--mono); text-transform: uppercase; border-radius: 2px; margin-top: 8px; }
+.match-success { background: rgba(199, 243, 107, 0.2); color: var(--acid); border: 1px solid var(--acid); }
+.match-fail { background: rgba(255, 120, 107, 0.2); color: var(--coral); border: 1px solid var(--coral); }
+.groups-list { margin-top: 12px; font: 11px var(--mono); background: var(--canvas); padding: 10px; border: 1px solid var(--line); }
+
+/* Simulator */
+.simulator-box { background: rgba(23, 29, 29, 0.95); border: 1px solid var(--aqua); padding: 24px; margin-bottom: 28px; border-radius: 4px; }
+.sim-grid { display: flex; flex-wrap: wrap; gap: 10px; margin: 16px 0; }
+.btn-sim { padding: 8px 14px; font: 11px var(--mono); border: 1px solid var(--line); background: var(--canvas); color: var(--ink); cursor: pointer; border-radius: 2px; }
+.btn-sim:hover { border-color: var(--aqua); color: var(--aqua); }
+.dedup-tag { display: inline-block; font: 10px var(--mono); color: var(--acid); background: rgba(199, 243, 107, 0.15); padding: 2px 6px; border-radius: 2px; margin-left: 8px; }
+.password-toggle { position: relative; }
+.toggle-eye { position: absolute; right: 10px; top: 34px; background: none; border: none; color: var(--muted); cursor: pointer; font: 10px var(--mono); }
+

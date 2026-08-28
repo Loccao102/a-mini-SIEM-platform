@@ -36,6 +36,9 @@ CREATE TABLE IF NOT EXISTS alerts (
     rule_id BIGINT NOT NULL REFERENCES rules(rule_id),
     asset_id BIGINT REFERENCES assets(asset_id),
     triggered_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+    occurrences INT NOT NULL DEFAULT 1,
+    entity_key TEXT,
     severity TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'open',
     assigned_to TEXT,
@@ -47,3 +50,4 @@ CREATE TABLE IF NOT EXISTS alert_events (
     event_id TEXT NOT NULL,
     PRIMARY KEY (alert_id, event_id)
 );
+

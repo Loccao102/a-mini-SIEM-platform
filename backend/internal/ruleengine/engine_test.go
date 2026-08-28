@@ -12,3 +12,20 @@ func TestFieldValue(t *testing.T) {
 		t.Fatal("event field lookup failed")
 	}
 }
+
+func TestGetEntityKey(t *testing.T) {
+	eventWithIP := parser.NormalizedEvent{SrcIP: "192.168.1.100", Username: "alice", Hostname: "host-1"}
+	if getEntityKey(eventWithIP) != "192.168.1.100" {
+		t.Fatalf("expected IP as entity key, got %s", getEntityKey(eventWithIP))
+	}
+
+	eventWithUser := parser.NormalizedEvent{Username: "bob", Hostname: "host-2"}
+	if getEntityKey(eventWithUser) != "bob" {
+		t.Fatalf("expected Username as entity key, got %s", getEntityKey(eventWithUser))
+	}
+
+	eventWithHost := parser.NormalizedEvent{Hostname: "host-3"}
+	if getEntityKey(eventWithHost) != "host-3" {
+		t.Fatalf("expected Hostname as entity key, got %s", getEntityKey(eventWithHost))
+	}
+}

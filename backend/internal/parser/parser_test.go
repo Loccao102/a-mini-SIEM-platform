@@ -17,23 +17,39 @@ func TestParseFailedSSHLogin(t *testing.T) {
 	}
 }
 
-func TestParseGenericLogPreservesRawMessage(t *testing.T) {
-	event := Parse(redis.XMessage{ID: "2-0", Values: map[string]any{"raw": "hello", "source_type": "generic"}})
-	if event.EventType != "log" || event.Message != "hello" || event.LogCategory != "generic" {
-		t.Fatalf("unexpected generic event: %#v", event)
+func TestParseSudoEscalation(t *testing.T) {
+	event := Parse(redis.XMessage{ID: "2-0", Values: map[string]any{"raw": "sudo:  alice : TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/bin/bash -i", "source_type": "linux_audit"}})
+	if event.EventType != "privilege_escalation" || event.Severity != "high" || event.Username != "alice" || event.Extra["command"] != "/bin/bash -i" {
+		t.Fatalf("unexpected sudo escalation event: %#v", event)
 	}
 }
 
-func TestParseWindowsLogonFailure(t *testing.T) {
-	event := Parse(redis.XMessage{ID: "3-0", Values: map[string]any{"raw": "An account failed to log on Account Name: alice Source Network Address: 192.0.2.20", "source_type": "windows_eventlog"}})
-	if event.LogCategory != "windows_security" || event.Username != "alice" || event.SrcIP != "192.0.2.20" {
-		t.Fatalf("unexpected Windows event: %#v", event)
+func TestParseWindowsAuditCleared(t *testing.T) {
+	event := Parse(redis.XMessage{ID: "3-0", Values: map[string]any{"raw": "Event ID: 1102 The audit log was cleared", "source_type": "windows_eventlog"}})
+	if event.EventType != "defense_evasion" || event.Severity != "critical" || event.LogCategory != "windows_security" {
+		t.Fatalf("unexpected Windows audit log clear event: %#v", event)
 	}
 }
 
-func TestParseNginxAccess(t *testing.T) {
-	event := Parse(redis.XMessage{ID: "4-0", Values: map[string]any{"raw": "192.0.2.30 - - [27/Aug/2026:12:00:00 +0000] \"GET /admin HTTP/1.1\" 404 120", "source_type": "nginx"}})
-	if event.EventType != "http_access" || event.SrcIP != "192.0.2.30" || event.Extra["status_code"] != "404" {
-		t.Fatalf("unexpected nginx event: %#v", event)
+func TestParseWebSQLInjection(t *testing.T) {
+	event := Parse(redis.XMessage{ID: "4-0", Values: map[string]any{"raw": "192.0.2.30 - - [27/Aug/2026:12:00:00 +0000] \"GET /api/user?id=1 UNION SELECT 1,2,3 HTTP/1.1\" 200 450", "source_type": "nginx"}})
+	if event.EventType != "web_sqli" || event.Severity != "critical" || event.SrcIP != "192.0.2.30" {
+		t.Fatalf("unexpected Web SQLi event: %#v", event)
+	}
+}
+
+func TestParseWebPathTraversal(t *testing.T) {
+	event := Parse(redis.XMessage{ID: "5-0", Values: map[string]any{"raw": "192.0.2.40 - - [27/Aug/2026:12:00:00 +0000] \"GET /download?file=../../../../etc/passwd HTTP/1.1\" 403 120", "source_type": "nginx"}})
+	if event.EventType != "web_lfi" || event.Severity != "high" || event.SrcIP != "192.0.2.40" {
+		t.Fatalf("unexpected Web LFI event: %#v", event)
+	}
+}
+
+func TestFingerprintConsistency(t *testing.T) {
+	now := time.Now()
+	fp1 := Fingerprint("web-01", now, "Failed password for root from 1.2.3.4")
+	fp2 := Fingerprint("web-01", now, "Failed password for root from 1.2.3.4")
+	if fp1 == "" || fp1 != fp2 {
+		t.Fatalf("fingerprint consistency check failed: %s vs %s", fp1, fp2)
 	}
 }
