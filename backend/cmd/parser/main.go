@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/ingest"
@@ -26,13 +27,17 @@ func main() {
 		log.Fatalf("prepare Elasticsearch index: %v", err)
 	}
 	log.Printf("parser consuming Redis Stream %s", env("REDIS_STREAM", ingest.DefaultStream))
-	if err := consumer.Consume(ctx, func(ctx context.Context, event parser.NormalizedEvent) error {
-		encoded, err := json.Marshal(event)
-		if err == nil {
+	if err := consumer.ConsumeBatch(ctx, envInt("PARSER_BATCH_SIZE", 100), envInt("PARSER_WORKERS", 4), func(ctx context.Context, events []parser.NormalizedEvent) error {
+		bulk := make([]any, len(events))
+		for index, event := range events {
+			encoded, err := json.Marshal(event)
+			if err != nil {
+				return err
+			}
 			log.Printf("normalized event: %s", encoded)
+			bulk[index] = event
 		}
-		if err != nil { return err }
-		return elastic.IndexEvent(ctx, event)
+		return elastic.BulkIndexEvents(ctx, bulk)
 	}); err != nil && ctx.Err() == nil {
 		log.Fatal(err)
 	}
@@ -50,4 +55,12 @@ func env(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func envInt(key string, fallback int) int {
+	value, err := strconv.Atoi(env(key, strconv.Itoa(fallback)))
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	return value
 }

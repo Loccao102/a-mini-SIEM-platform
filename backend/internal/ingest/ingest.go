@@ -22,6 +22,13 @@ type Message struct {
 	ReceivedAt time.Time
 }
 
+type StreamStatus struct {
+	StreamLength int64  `json:"stream_length"`
+	Pending      int64  `json:"pending"`
+	Consumers    int64  `json:"consumers"`
+	LastID       string `json:"last_id"`
+}
+
 func NewClient(redisURL, stream string) (*Client, error) {
 	options, err := redis.ParseURL(redisURL)
 	if err != nil {
@@ -32,6 +39,29 @@ func NewClient(redisURL, stream string) (*Client, error) {
 
 func (client *Client) Ping(ctx context.Context) error {
 	return client.redis.Ping(ctx).Err()
+}
+
+func (client *Client) Status(ctx context.Context, group string) (StreamStatus, error) {
+	stream, err := client.redis.XInfoStream(ctx, client.stream).Result()
+	if err != nil {
+		if err == redis.Nil {
+			return StreamStatus{}, nil
+		}
+		return StreamStatus{}, err
+	}
+	status := StreamStatus{StreamLength: stream.Length, LastID: stream.LastGeneratedID}
+	groups, err := client.redis.XInfoGroups(ctx, client.stream).Result()
+	if err != nil {
+		return StreamStatus{}, err
+	}
+	for _, current := range groups {
+		if current.Name == group {
+			status.Pending = current.Pending
+			status.Consumers = current.Consumers
+			break
+		}
+	}
+	return status, nil
 }
 
 func (client *Client) Publish(ctx context.Context, message Message) (string, error) {

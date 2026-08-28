@@ -11,6 +11,7 @@ import (
 
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/auth"
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/ingest"
+	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/parser"
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/storage"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -34,13 +35,20 @@ func (handler *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/ingest", handler.ingestLog)
 	mux.Handle("POST /api/v1/rules/test-regex", handler.requireRole("viewer", http.HandlerFunc(handler.testRegex)))
 	mux.Handle("GET /api/v1/summary", handler.requireRole("viewer", http.HandlerFunc(handler.summary)))
+	mux.Handle("GET /api/v1/pipeline/status", handler.requireRole("viewer", http.HandlerFunc(handler.pipelineStatus)))
 	mux.Handle("GET /api/v1/analytics", handler.requireRole("viewer", http.HandlerFunc(handler.analytics)))
 	mux.Handle("GET /api/v1/events", handler.requireRole("viewer", http.HandlerFunc(handler.events)))
 	mux.Handle("GET /api/v1/assets", handler.requireRole("viewer", http.HandlerFunc(handler.assets)))
+	mux.Handle("POST /api/v1/assets", handler.requireRole("analyst", http.HandlerFunc(handler.createAsset)))
 	mux.Handle("/api/v1/rules", handler.requireRole("viewer", http.HandlerFunc(handler.rulesRoute)))
 	mux.Handle("/api/v1/rules/{id}", handler.requireRole("viewer", http.HandlerFunc(handler.rulesRoute)))
 	mux.Handle("/api/v1/alerts", handler.requireRole("viewer", http.HandlerFunc(handler.alertsRoute)))
 	mux.Handle("/api/v1/alerts/{id}", handler.requireRole("viewer", http.HandlerFunc(handler.alertsRoute)))
+	mux.Handle("/api/v1/cases", handler.requireRole("viewer", http.HandlerFunc(handler.casesRoute)))
+	mux.Handle("/api/v1/cases/{id}", handler.requireRole("viewer", http.HandlerFunc(handler.casesRoute)))
+	mux.Handle("/api/v1/cases/{id}/notes", handler.requireRole("analyst", http.HandlerFunc(handler.caseNotesRoute)))
+	mux.Handle("/api/v1/cases/{id}/timeline", handler.requireRole("viewer", http.HandlerFunc(handler.caseTimeline)))
+	mux.Handle("/api/v1/cases/{id}/alerts/{alert_id}", handler.requireRole("analyst", http.HandlerFunc(handler.caseAlertRoute)))
 	mux.Handle("/api/v1/users", handler.requireRole("admin", http.HandlerFunc(handler.usersRoute)))
 	mux.Handle("/api/v1/users/{id}", handler.requireRole("admin", http.HandlerFunc(handler.usersRoute)))
 	return withCORS(mux)
@@ -135,10 +143,15 @@ func (handler *Handler) ingestLog(response http.ResponseWriter, request *http.Re
 	if payload.Hostname == "" {
 		payload.Hostname = "http-agent"
 	}
+	payload.Hostname = strings.TrimSpace(payload.Hostname)
 	if payload.AgentID == "" {
 		payload.AgentID = payload.Agent.ID
 	}
-	if err := handler.upsertAsset(request, payload.Hostname, payload.SourceType, payload.AgentID); err != nil {
+	if err := handler.registerLogSource(request, payload.Hostname, payload.SourceType, payload.AgentID); err != nil {
+		if err == pgx.ErrNoRows {
+			writeError(response, http.StatusUnprocessableEntity, fmt.Errorf("asset %q is not registered", payload.Hostname))
+			return
+		}
 		writeError(response, http.StatusInternalServerError, err)
 		return
 	}
@@ -150,9 +163,10 @@ func (handler *Handler) ingestLog(response http.ResponseWriter, request *http.Re
 	writeJSON(response, http.StatusAccepted, map[string]string{"stream_id": id})
 }
 
-func (handler *Handler) upsertAsset(request *http.Request, hostname, sourceType, agentID string) error {
+func (handler *Handler) registerLogSource(request *http.Request, hostname, sourceType, agentID string) error {
+	hostname = strings.TrimSpace(hostname)
 	var assetID int64
-	err := handler.postgres.QueryRow(request.Context(), `SELECT asset_id FROM assets WHERE hostname=$1`, hostname).Scan(&assetID)
+	err := handler.postgres.QueryRow(request.Context(), `SELECT asset_id FROM assets WHERE LOWER(hostname) = LOWER($1)`, hostname).Scan(&assetID)
 	if err == nil {
 		result, err := handler.postgres.Exec(request.Context(), `UPDATE log_sources SET status='active', agent_id=$1, last_seen=now() WHERE asset_id=$2 AND source_type=$3`, agentID, assetID, sourceType)
 		if err != nil || result.RowsAffected() > 0 {
@@ -164,12 +178,70 @@ func (handler *Handler) upsertAsset(request *http.Request, hostname, sourceType,
 	if err != pgx.ErrNoRows {
 		return err
 	}
-	err = handler.postgres.QueryRow(request.Context(), `INSERT INTO assets (hostname, os_type) VALUES ($1, $2) RETURNING asset_id`, hostname, sourceType).Scan(&assetID)
-	if err != nil {
-		return err
+	return pgx.ErrNoRows
+}
+
+type createAssetRequest struct {
+	Hostname    string  `json:"hostname"`
+	IPAddress   *string `json:"ip_address"`
+	OSType      string  `json:"os_type"`
+	Criticality string  `json:"criticality"`
+	Owner       *string `json:"owner"`
+}
+
+func (handler *Handler) createAsset(response http.ResponseWriter, request *http.Request) {
+	var payload createAssetRequest
+	if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+		writeError(response, http.StatusBadRequest, fmt.Errorf("invalid asset payload"))
+		return
 	}
-	_, err = handler.postgres.Exec(request.Context(), `INSERT INTO log_sources (asset_id, source_type, agent_id, status, last_seen) VALUES ($1, $2, $3, 'active', now())`, assetID, sourceType, agentID)
-	return err
+	payload.Hostname = strings.TrimSpace(payload.Hostname)
+	payload.OSType = strings.TrimSpace(strings.ToLower(payload.OSType))
+	payload.Criticality = strings.TrimSpace(strings.ToLower(payload.Criticality))
+	if payload.Hostname == "" || payload.OSType == "" {
+		writeError(response, http.StatusBadRequest, fmt.Errorf("hostname and os_type are required"))
+		return
+	}
+	if payload.Criticality == "" {
+		payload.Criticality = "medium"
+	}
+	if payload.Criticality != "critical" && payload.Criticality != "high" && payload.Criticality != "medium" && payload.Criticality != "low" {
+		writeError(response, http.StatusBadRequest, fmt.Errorf("criticality must be critical, high, medium, or low"))
+		return
+	}
+	claims := handler.claims(request)
+	transaction, err := handler.postgres.Begin(request.Context())
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, err)
+		return
+	}
+	defer transaction.Rollback(request.Context())
+	var assetID int64
+	err = transaction.QueryRow(request.Context(), `INSERT INTO assets (hostname, ip_address, os_type, criticality, owner) VALUES ($1, NULLIF($2, '')::inet, $3, $4, NULLIF($5, '')) RETURNING asset_id`, payload.Hostname, valueOrEmpty(payload.IPAddress), payload.OSType, payload.Criticality, valueOrEmpty(payload.Owner)).Scan(&assetID)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "duplicate") || strings.Contains(strings.ToLower(err.Error()), "unique") {
+			writeError(response, http.StatusConflict, fmt.Errorf("asset %q already exists", payload.Hostname))
+			return
+		}
+		writeError(response, http.StatusInternalServerError, err)
+		return
+	}
+	if err = recordAudit(request.Context(), transaction, claims.UserID, "asset.created", "asset", assetID, map[string]any{"hostname": payload.Hostname, "os_type": payload.OSType}); err != nil {
+		writeError(response, http.StatusInternalServerError, err)
+		return
+	}
+	if err = transaction.Commit(request.Context()); err != nil {
+		writeError(response, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(response, http.StatusCreated, map[string]any{"asset_id": assetID, "hostname": payload.Hostname})
+}
+
+func valueOrEmpty(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(*value)
 }
 
 func (handler *Handler) events(response http.ResponseWriter, request *http.Request) {
@@ -203,8 +275,24 @@ func (handler *Handler) summary(response http.ResponseWriter, request *http.Requ
 	writeJSON(response, http.StatusOK, map[string]int64{"open_alerts": openAlerts, "events_processed": events, "connected_assets": assets})
 }
 
+func (handler *Handler) pipelineStatus(response http.ResponseWriter, request *http.Request) {
+	status, err := handler.ingest.Status(request.Context(), parser.DefaultConsumerGroup)
+	if err != nil {
+		writeError(response, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{
+		"stream":         ingest.DefaultStream,
+		"consumer_group": parser.DefaultConsumerGroup,
+		"stream_length":  status.StreamLength,
+		"pending":        status.Pending,
+		"consumers":      status.Consumers,
+		"last_id":        status.LastID,
+	})
+}
+
 func (handler *Handler) assets(response http.ResponseWriter, request *http.Request) {
-	rows, err := handler.postgres.Query(request.Context(), `SELECT asset_id, hostname, ip_address, os_type, criticality, owner, created_at FROM assets ORDER BY criticality, hostname`)
+	rows, err := handler.postgres.Query(request.Context(), `SELECT asset_id, hostname, ip_address::text, os_type, criticality, owner, created_at FROM assets ORDER BY criticality, hostname`)
 	if err != nil {
 		writeError(response, http.StatusInternalServerError, err)
 		return
@@ -345,55 +433,129 @@ func (handler *Handler) testRegex(response http.ResponseWriter, request *http.Re
 }
 
 func (handler *Handler) analytics(response http.ResponseWriter, request *http.Request) {
-	totalEvents, _ := handler.elastic.Count(request.Context())
-
-	// Top attacking IPs matrix with GeoIP Threat Intel
-	topAttackerIPs := []map[string]any{
-		{"ip": "185.220.101.5", "count": 420, "country": "Germany", "country_code": "DE", "threat_level": "critical", "threat_category": "Tor Exit Node / Anonymizer", "reputation_score": 98},
-		{"ip": "192.168.1.105", "count": 280, "country": "Internal Testbed", "country_code": "LAN", "threat_level": "high", "threat_category": "Active Attacker Node", "reputation_score": 92},
-		{"ip": "45.33.32.15", "count": 195, "country": "United States", "country_code": "US", "threat_level": "high", "threat_category": "Automated Scanner Node", "reputation_score": 88},
-		{"ip": "91.240.118.2", "count": 140, "country": "Russia", "country_code": "RU", "threat_level": "critical", "threat_category": "Known C2 Infrastructure", "reputation_score": 95},
-		{"ip": "114.114.114.114", "count": 90, "country": "China", "country_code": "CN", "threat_level": "high", "threat_category": "Brute Force Botnet Node", "reputation_score": 85},
+	now := time.Now().UTC()
+	result, err := handler.elastic.Search(request.Context(), map[string]any{
+		"size":             0,
+		"track_total_hits": true,
+		"query":            map[string]any{"match_all": map[string]any{}},
+		"aggs": map[string]any{
+			"events_by_severity": map[string]any{"terms": map[string]any{"field": "severity.keyword", "size": 20}},
+			"events_by_category": map[string]any{"terms": map[string]any{"field": "log_category.keyword", "size": 20}},
+			"top_attacking_ips": map[string]any{
+				"terms": map[string]any{"field": "src_ip.keyword", "size": 5, "exclude": ""},
+				"aggs":  map[string]any{"sample": map[string]any{"top_hits": map[string]any{"size": 1, "_source": []string{"extra_fields"}}}},
+			},
+			"top_targeted_users": map[string]any{"terms": map[string]any{"field": "username.keyword", "size": 5, "exclude": ""}},
+			"timeline_last_24h": map[string]any{
+				"filter": map[string]any{"range": map[string]any{"event_time": map[string]any{"gte": now.Add(-24 * time.Hour).Format(time.RFC3339), "lte": now.Format(time.RFC3339)}}},
+				"aggs":   map[string]any{"buckets": map[string]any{"date_histogram": map[string]any{"field": "event_time", "fixed_interval": "4h", "min_doc_count": 0, "extended_bounds": map[string]any{"min": now.Add(-24 * time.Hour).Format(time.RFC3339), "max": now.Format(time.RFC3339)}}}},
+			},
+		},
+	})
+	if err != nil {
+		writeError(response, http.StatusBadGateway, err)
+		return
 	}
-
-	topTargetedUsers := []map[string]any{
-		{"username": "root", "count": 520},
-		{"username": "admin", "count": 310},
-		{"username": "Administrator", "count": 180},
-		{"username": "alice", "count": 95},
+	var analytics struct {
+		Hits struct {
+			Total struct {
+				Value int64 `json:"value"`
+			} `json:"total"`
+		} `json:"hits"`
+		Aggregations struct {
+			Severity struct {
+				Buckets []struct {
+					Key      string `json:"key"`
+					DocCount int64  `json:"doc_count"`
+				} `json:"buckets"`
+			} `json:"events_by_severity"`
+			Category struct {
+				Buckets []struct {
+					Key      string `json:"key"`
+					DocCount int64  `json:"doc_count"`
+				} `json:"buckets"`
+			} `json:"events_by_category"`
+			Attackers struct {
+				Buckets []struct {
+					Key      string `json:"key"`
+					DocCount int64  `json:"doc_count"`
+					Sample   struct {
+						Hits struct {
+							Hits []struct {
+								Source struct {
+									Extra map[string]string `json:"extra_fields"`
+								} `json:"_source"`
+							} `json:"hits"`
+						} `json:"hits"`
+					} `json:"sample"`
+				} `json:"buckets"`
+			} `json:"top_attacking_ips"`
+			Users struct {
+				Buckets []struct {
+					Key      string `json:"key"`
+					DocCount int64  `json:"doc_count"`
+				} `json:"buckets"`
+			} `json:"top_targeted_users"`
+			Timeline struct {
+				Buckets struct {
+					Buckets []struct {
+						KeyAsString string `json:"key_as_string"`
+						Key         int64  `json:"key"`
+						DocCount    int64  `json:"doc_count"`
+					} `json:"buckets"`
+				} `json:"buckets"`
+			} `json:"timeline_last_24h"`
+		} `json:"aggregations"`
 	}
-
-	eventsBySeverity := map[string]int64{
-		"critical": 65,
-		"high":     210,
-		"medium":   340,
-		"info":     totalEvents,
+	if err := json.Unmarshal(result, &analytics); err != nil {
+		writeError(response, http.StatusBadGateway, err)
+		return
 	}
-
-	eventsByCategory := map[string]int64{
-		"nginx":            480,
-		"linux_sshd":       320,
-		"windows_security": 210,
-		"linux_audit":      110,
-		"generic":          80,
+	eventsBySeverity := map[string]int64{}
+	for _, bucket := range analytics.Aggregations.Severity.Buckets {
+		eventsBySeverity[bucket.Key] = bucket.DocCount
 	}
-
-	now := time.Now()
-	timeline := make([]map[string]any, 0)
-	for i := 5; i >= 0; i-- {
-		t := now.Add(-time.Duration(i*4) * time.Hour)
-		timeStr := t.Format("15:00")
-		count := 50 + ((i*37 + 19) % 150)
-		timeline = append(timeline, map[string]any{"time": timeStr, "count": count})
+	eventsByCategory := map[string]int64{}
+	for _, bucket := range analytics.Aggregations.Category.Buckets {
+		eventsByCategory[bucket.Key] = bucket.DocCount
+	}
+	topAttackerIPs := make([]map[string]any, 0, len(analytics.Aggregations.Attackers.Buckets))
+	for _, bucket := range analytics.Aggregations.Attackers.Buckets {
+		entry := map[string]any{"ip": bucket.Key, "count": bucket.DocCount}
+		if len(bucket.Sample.Hits.Hits) > 0 {
+			for key, value := range bucket.Sample.Hits.Hits[0].Source.Extra {
+				switch key {
+				case "country", "country_code", "threat_level", "threat_category":
+					entry[key] = value
+				case "reputation_score":
+					if score, parseErr := strconv.Atoi(value); parseErr == nil {
+						entry[key] = score
+					}
+				}
+			}
+		}
+		topAttackerIPs = append(topAttackerIPs, entry)
+	}
+	topTargetedUsers := make([]map[string]any, 0, len(analytics.Aggregations.Users.Buckets))
+	for _, bucket := range analytics.Aggregations.Users.Buckets {
+		topTargetedUsers = append(topTargetedUsers, map[string]any{"username": bucket.Key, "count": bucket.DocCount})
+	}
+	timeline := make([]map[string]any, 0, len(analytics.Aggregations.Timeline.Buckets.Buckets))
+	for _, bucket := range analytics.Aggregations.Timeline.Buckets.Buckets {
+		timestamp := bucket.KeyAsString
+		if timestamp == "" {
+			timestamp = time.UnixMilli(bucket.Key).UTC().Format(time.RFC3339)
+		}
+		timeline = append(timeline, map[string]any{"time": timestamp, "count": bucket.DocCount})
 	}
 
 	writeJSON(response, http.StatusOK, map[string]any{
-		"total_events":        totalEvents,
-		"events_by_severity":  eventsBySeverity,
-		"events_by_category":  eventsByCategory,
-		"top_attacking_ips":   topAttackerIPs,
-		"top_targeted_users":  topTargetedUsers,
-		"timeline":            timeline,
+		"total_events":       analytics.Hits.Total.Value,
+		"events_by_severity": eventsBySeverity,
+		"events_by_category": eventsByCategory,
+		"top_attacking_ips":  topAttackerIPs,
+		"top_targeted_users": topTargetedUsers,
+		"timeline":           timeline,
 	})
 }
 

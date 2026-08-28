@@ -5,17 +5,23 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { getMe, User } from "@/lib/api";
 
+const demoModeAvailable = process.env.NEXT_PUBLIC_MODE === "develop";
+
 export function NavHeader() {
   const pathname = usePathname();
   const router = useRouter();
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() =>
+    typeof window !== "undefined" && Boolean(localStorage.getItem("siem_token"))
+  );
+  const [demoEnabled, setDemoEnabled] = useState(() =>
+    demoModeAvailable && (typeof window === "undefined" || localStorage.getItem("siem_mode") !== "production")
+  );
 
   useEffect(() => {
     let active = true;
     const token = typeof window !== "undefined" ? localStorage.getItem("siem_token") : null;
     if (!token) {
-      setLoading(false);
       return;
     }
     getMe()
@@ -38,6 +44,13 @@ export function NavHeader() {
     localStorage.removeItem("siem_token");
     setCurrentUser(null);
     router.push("/login");
+  }
+
+  function setMode(mode: "demo" | "production") {
+    const enabled = mode === "demo" && demoModeAvailable;
+    localStorage.setItem("siem_mode", enabled ? "demo" : "production");
+    setDemoEnabled(enabled);
+    window.dispatchEvent(new CustomEvent("siem-mode-change", { detail: enabled }));
   }
 
   const roleLabel = currentUser?.role?.toUpperCase() ?? "GUEST";
@@ -72,6 +85,9 @@ export function NavHeader() {
         <Link className={pathname === "/alerts" ? "active" : ""} href="/alerts">
           Alerts
         </Link>
+        <Link className={pathname === "/cases" ? "active" : ""} href="/cases">
+          Cases
+        </Link>
         <Link className={pathname === "/events" ? "active" : ""} href="/events">
           Log Explorer
         </Link>
@@ -87,6 +103,10 @@ export function NavHeader() {
       </nav>
 
       <div className="nav-user">
+        <div className="mode-toggle" aria-label="Application mode">
+          <button type="button" className={demoEnabled ? "active" : ""} disabled={!demoModeAvailable} onClick={() => setMode("demo")}>Demo</button>
+          <button type="button" className={!demoEnabled ? "active" : ""} onClick={() => setMode("production")}>Production</button>
+        </div>
         {!loading && currentUser ? (
           <>
             <div className="user-info">

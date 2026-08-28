@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Asset, ApiError, getAssets } from "@/lib/api";
+import { Asset, ApiError, createAsset, getAssets } from "@/lib/api";
 
 function criticality_color(c: string) {
   if (c === "critical") return "var(--coral)";
@@ -21,6 +21,9 @@ export default function AssetsPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<"all" | "linux" | "windows">("all");
+  const [form, setForm] = useState({ hostname: "", ip_address: "", os_type: "linux", criticality: "medium", owner: "" });
+  const [saving, setSaving] = useState(false);
+  const [formStatus, setFormStatus] = useState("");
 
   useEffect(() => {
     getAssets()
@@ -37,6 +40,22 @@ export default function AssetsPage() {
         setLoading(false);
       });
   }, []);
+
+  async function handleCreateAsset(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSaving(true);
+    setFormStatus("");
+    try {
+      await createAsset(form);
+      setForm({ hostname: "", ip_address: "", os_type: "linux", criticality: "medium", owner: "" });
+      setFormStatus("Asset registered. It can now send logs.");
+      setAssets(await getAssets());
+    } catch (err: unknown) {
+      setFormStatus(err instanceof ApiError ? err.message : "Could not register asset.");
+    } finally {
+      setSaving(false);
+    }
+  }
 
   const filtered = assets.filter((a) => filter === "all" || a.os_type === filter);
 
@@ -106,6 +125,27 @@ export default function AssetsPage() {
           ))}
         </div>
 
+        <form onSubmit={handleCreateAsset} className="mb-6 grid grid-cols-1 gap-3 border border-[var(--line)] bg-[var(--surface)] p-4 md:grid-cols-5">
+          <input required placeholder="Hostname" value={form.hostname} onChange={(event) => setForm({ ...form, hostname: event.target.value })} />
+          <input placeholder="IP address" value={form.ip_address} onChange={(event) => setForm({ ...form, ip_address: event.target.value })} />
+          <select value={form.os_type} onChange={(event) => setForm({ ...form, os_type: event.target.value })}>
+            <option value="linux">Linux</option>
+            <option value="windows">Windows</option>
+            <option value="generic">Generic</option>
+          </select>
+          <select value={form.criticality} onChange={(event) => setForm({ ...form, criticality: event.target.value })}>
+            <option value="low">Low</option>
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
+            <option value="critical">Critical</option>
+          </select>
+          <input placeholder="Owner (optional)" value={form.owner} onChange={(event) => setForm({ ...form, owner: event.target.value })} />
+          <button disabled={saving} type="submit" className="btn-preset bg-[var(--acid)] font-bold text-[var(--canvas)] md:col-span-5">
+            {saving ? "Registering..." : "Register Asset"}
+          </button>
+          {formStatus && <p className="text-xs text-[var(--acid)] md:col-span-5">{formStatus}</p>}
+        </form>
+
         {/* Error state */}
         {error && (
           <div
@@ -120,7 +160,7 @@ export default function AssetsPage() {
               marginBottom: "1.5rem",
             }}
           >
-            ⚠️ {error}
+            {error}
           </div>
         )}
 
@@ -131,7 +171,7 @@ export default function AssetsPage() {
 
         {/* Empty state */}
         {!loading && !error && filtered.length === 0 && (
-          <p className="empty-state">No assets found. Assets register automatically when agents send their first log.</p>
+          <p className="empty-state">No assets found. Register a machine before sending its first log.</p>
         )}
 
         {/* Asset Grid */}

@@ -7,7 +7,8 @@ import { login } from "@/lib/api";
 
 export default function LoginPage() {
   const router = useRouter();
-  const [form, setForm] = useState({ email: "admin@example.com", password: "admin" });
+  const isDevelop = process.env.NEXT_PUBLIC_MODE === "develop";
+  const [form, setForm] = useState({ email: "admin@example.com", password: isDevelop ? "admin" : "" });
   const [showPassword, setShowPassword] = useState(false);
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
@@ -51,8 +52,7 @@ export default function LoginPage() {
           Đăng nhập để điều tra sự cố, quản lý tập luật và phân quyền hệ thống.
         </p>
 
-        {/* 1-Click Demo Logins Section */}
-        <div className="demo-logins-box mb-6 p-3 bg-[var(--canvas)] border border-[var(--line)] rounded">
+        {isDevelop && <div className="demo-logins-box mb-6 p-3 bg-[var(--canvas)] border border-[var(--line)] rounded">
           <span className="block text-xs font-mono text-[var(--aqua)] mb-2 uppercase tracking-wider">
             ⚡ 1-Click Demo Logins
           </span>
@@ -82,7 +82,7 @@ export default function LoginPage() {
               <code className="text-xs text-[var(--acid)]">viewer</code>
             </button>
           </div>
-        </div>
+        </div>}
 
         <form className="space-y-4" onSubmit={submit}>
           <label>

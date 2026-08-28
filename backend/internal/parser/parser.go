@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -24,9 +25,9 @@ var (
 
 // Linux Audit & Sudo Regexes
 var (
-	sudoExec      = regexp.MustCompile(`(?i)sudo:\s*(\S+)\s*:.*?COMMAND=(.+)$`)
+	sudoExec       = regexp.MustCompile(`(?i)sudo:\s*(\S+)\s*:.*?COMMAND=(.+)$`)
 	sudoTargetUser = regexp.MustCompile(`(?i)USER=(\S+)`)
-	dangerousCmds = regexp.MustCompile(`(?i)(COMMAND=.*(/bin/bash|-i|/bin/sh)|curl\s+|wget\s+|nc\s+|ncat\s+|netcat\s+|bash\s+-i)`)
+	dangerousCmds  = regexp.MustCompile(`(?i)(COMMAND=.*(/bin/bash|-i|/bin/sh)|curl\s+|wget\s+|nc\s+|ncat\s+|netcat\s+|bash\s+-i)`)
 )
 
 // Windows Security Events Regexes
@@ -391,45 +392,119 @@ func (consumer *Consumer) EnsureGroup(ctx context.Context) error {
 }
 
 func (consumer *Consumer) Consume(ctx context.Context, handler func(context.Context, NormalizedEvent) error) error {
+	return consumer.ConsumeBatch(ctx, 10, 1, func(ctx context.Context, events []NormalizedEvent) error {
+		for _, event := range events {
+			if err := handler(ctx, event); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func (consumer *Consumer) ConsumeBatch(ctx context.Context, batchSize, workers int, handler func(context.Context, []NormalizedEvent) error) error {
 	if err := consumer.EnsureGroup(ctx); err != nil {
 		return err
 	}
+	if batchSize <= 0 {
+		batchSize = 10
+	}
+	if workers <= 0 {
+		workers = 1
+	}
+	readPending := true
 	for {
+		streamCursor := ">"
+		blockDuration := time.Second
+		if readPending {
+			streamCursor = "0"
+			blockDuration = 0
+		}
 		streams, err := consumer.redis.XReadGroup(ctx, &redis.XReadGroupArgs{
 			Group:    consumer.group,
 			Consumer: consumer.name,
-			Streams:  []string{consumer.stream, ">"},
-			Count:    10,
-			Block:    time.Second,
+			Streams:  []string{consumer.stream, streamCursor},
+			Count:    int64(batchSize),
+			Block:    blockDuration,
 		}).Result()
 		if err != nil {
 			if err == redis.Nil {
+				readPending = false
 				continue
 			}
 			return err
 		}
+		if readPending && len(streams) == 0 {
+			readPending = false
+			continue
+		}
+		if readPending {
+			readPending = false
+		}
 		for _, stream := range streams {
-			for _, message := range stream.Messages {
-				event := Parse(message)
-
-				// Raw Log Deduplication in 5-minute sliding window via Redis
-				if consumer.redis != nil && event.Fingerprint != "" {
-					key := fmt.Sprintf("siem:dedup:log:%s", event.Fingerprint)
-					count, err := consumer.redis.Incr(ctx, key).Result()
-					if err == nil {
-						if count == 1 {
-							_ = consumer.redis.Expire(ctx, key, 5*time.Minute).Err()
+			if len(stream.Messages) == 0 {
+				continue
+			}
+			events := make([]NormalizedEvent, len(stream.Messages))
+			type parseResult struct {
+				index int
+				event NormalizedEvent
+				err   error
+			}
+			jobs := make(chan int)
+			results := make(chan parseResult, len(stream.Messages))
+			workerCount := workers
+			if workerCount > len(stream.Messages) {
+				workerCount = len(stream.Messages)
+			}
+			var waitGroup sync.WaitGroup
+			for worker := 0; worker < workerCount; worker++ {
+				waitGroup.Add(1)
+				go func() {
+					defer waitGroup.Done()
+					for index := range jobs {
+						if ctx.Err() != nil {
+							results <- parseResult{index: index, err: ctx.Err()}
+							continue
 						}
-						event.DuplicateCount = int(count)
-						if count > 1 {
-							event.Extra["dedup_status"] = fmt.Sprintf("%dx deduplicated", count)
+						event := Parse(stream.Messages[index])
+						if event.Fingerprint != "" {
+							key := fmt.Sprintf("siem:dedup:log:%s", event.Fingerprint)
+							count, err := consumer.redis.Incr(ctx, key).Result()
+							if err == nil {
+								if count == 1 {
+									_ = consumer.redis.Expire(ctx, key, 5*time.Minute).Err()
+								}
+								event.DuplicateCount = int(count)
+								if count > 1 {
+									event.Extra["dedup_status"] = fmt.Sprintf("%dx deduplicated", count)
+								}
+							}
 						}
+						results <- parseResult{index: index, event: event}
 					}
+				}()
+			}
+			go func() {
+				defer close(jobs)
+				for index := range stream.Messages {
+					jobs <- index
 				}
-
-				if err := handler(ctx, event); err != nil {
-					return fmt.Errorf("handle event %s: %w", message.ID, err)
+			}()
+			go func() {
+				waitGroup.Wait()
+				close(results)
+			}()
+			for result := range results {
+				if result.err != nil {
+					return fmt.Errorf("parse event %s: %w", stream.Messages[result.index].ID, result.err)
 				}
+				events[result.index] = result.event
+			}
+			if err := handler(ctx, events); err != nil {
+				return fmt.Errorf("handle batch: %w", err)
+			}
+			for _, message := range stream.Messages {
 				if err := consumer.redis.XAck(ctx, consumer.stream, consumer.group, message.ID).Err(); err != nil {
 					return fmt.Errorf("ack event %s: %w", message.ID, err)
 				}

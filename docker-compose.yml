@@ -49,6 +49,7 @@ services:
     build: ./backend
     environment:
       API_ADDR: :8080
+      MODE: ${MODE:-production}
       POSTGRES_URL: postgres://${POSTGRES_USER:-siem}:${POSTGRES_PASSWORD:-siem_dev_password}@postgres:5432/${POSTGRES_DB:-siem}?sslmode=disable
       REDIS_URL: redis://redis:6379/0
       ELASTICSEARCH_URL: http://elasticsearch:9200
@@ -57,6 +58,8 @@ services:
       JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-change-me-now}
+      PARSER_BATCH_SIZE: ${PARSER_BATCH_SIZE:-100}
+      PARSER_WORKERS: ${PARSER_WORKERS:-4}
     ports:
       - "${API_PORT:-8080}:8080"
     depends_on:
@@ -95,6 +98,7 @@ services:
     build: ./frontend
     environment:
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8080}
+      NEXT_PUBLIC_MODE: ${MODE:-production}
     ports:
       - "${FRONTEND_PORT:-3000}:3000"
     depends_on:

@@ -5,6 +5,10 @@ import { useEffect, useState } from "react";
 import { EventRecord, getEvents, ingestLog } from "@/lib/api";
 
 export default function EventsPage() {
+  const isDevelop = process.env.NEXT_PUBLIC_MODE === "develop";
+  const [demoEnabled, setDemoEnabled] = useState(() =>
+    isDevelop && (typeof window === "undefined" || localStorage.getItem("siem_mode") !== "production")
+  );
   const [events, setEvents] = useState<EventRecord[]>([]);
   const [query, setQuery] = useState("");
   const [error, setError] = useState("");
@@ -13,7 +17,7 @@ export default function EventsPage() {
   const [simOpen, setSimOpen] = useState(true);
   const [customMsg, setCustomMsg] = useState("");
   const [customSource, setCustomSource] = useState("nginx");
-  const [customHost, setCustomHost] = useState("web-prod-01");
+  const [customHost, setCustomHost] = useState("");
   const [simStatus, setSimStatus] = useState("");
   const [sending, setSending] = useState(false);
 
@@ -26,6 +30,12 @@ export default function EventsPage() {
       setError("Events could not be loaded. Sign in and try again.");
     }
   }
+
+  useEffect(() => {
+    const handleModeChange = (event: Event) => setDemoEnabled((event as CustomEvent<boolean>).detail);
+    window.addEventListener("siem-mode-change", handleModeChange);
+    return () => window.removeEventListener("siem-mode-change", handleModeChange);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -98,7 +108,7 @@ export default function EventsPage() {
       {/* Log Ingest Simulator Section */}
       <section className="simulator-box">
         <div className="flex justify-between items-center mb-2">
-          <h2 className="text-lg font-medium text-[var(--acid)]">
+          <h2 className="text-lg font-medium text-(--acid)">
             🧪 Simulate Client Log Ingestion (Bộ mô phỏng gửi Log)
           </h2>
           <button
@@ -112,11 +122,11 @@ export default function EventsPage() {
 
         {simOpen && (
           <div className="mt-4">
-            <p className="text-xs text-[var(--muted)] mb-3">
+            <p className="text-xs text-(--muted) mb-3">
               Bấm 1-Click để gửi các mẫu kịch bản tấn công thực tế hoặc kiểm thử tính năng gom cụm dữ liệu trùng (Deduplication):
             </p>
 
-            <div className="sim-grid">
+            {isDevelop && demoEnabled && <div className="sim-grid">
               <button
                 disabled={sending}
                 type="button"
@@ -182,7 +192,7 @@ export default function EventsPage() {
               <button
                 disabled={sending}
                 type="button"
-                className="btn-sim hover:border-[var(--acid)]"
+                className="btn-sim hover:border-(--acid)"
                 onClick={() =>
                   handleSendBatch([
                     { msg: "Repeat exact duplicate raw log line test for SHA-256 fingerprint deduplication", source: "generic", host: "test-node" },
@@ -192,15 +202,21 @@ export default function EventsPage() {
               >
                 ⚡ Test Duplicate Raw Log (SHA-256 Dedup)
               </button>
-            </div>
+            </div>}
 
             {/* Custom Log Ingestion */}
-            <div className="mt-4 pt-4 border-t border-[var(--line)] grid grid-cols-1 md:grid-cols-4 gap-3">
+            <div className="mt-4 pt-4 border-t border-(--line) grid grid-cols-1 md:grid-cols-4 gap-3">
               <input
                 className="md:col-span-2 text-xs"
                 placeholder="Nhập nội dung log tùy ý (Custom Log Message)..."
                 value={customMsg}
                 onChange={(e) => setCustomMsg(e.target.value)}
+              />
+              <input
+                className="text-xs"
+                placeholder="Hostname đã đăng ký"
+                value={customHost}
+                onChange={(e) => setCustomHost(e.target.value)}
               />
               <select className="text-xs" value={customSource} onChange={(e) => setCustomSource(e.target.value)}>
                 <option value="nginx">Nginx Web</option>
@@ -210,16 +226,16 @@ export default function EventsPage() {
                 <option value="generic">Generic</option>
               </select>
               <button
-                disabled={sending || !customMsg.trim()}
+                disabled={sending || !customMsg.trim() || !customHost.trim()}
                 type="button"
-                className="btn-preset bg-[var(--acid)] text-[var(--canvas)] font-bold"
+                className="btn-preset bg-(--acid) text-(--canvas) font-bold"
                 onClick={() => handleSendLog(customMsg, customSource, customHost)}
               >
                 {sending ? "Sending..." : "Gửi Log"}
               </button>
             </div>
 
-            {simStatus && <div className="mt-3 text-xs font-mono text-[var(--acid)]">{simStatus}</div>}
+            {simStatus && <div className="mt-3 text-xs font-mono text-(--acid)">{simStatus}</div>}
           </div>
         )}
       </section>

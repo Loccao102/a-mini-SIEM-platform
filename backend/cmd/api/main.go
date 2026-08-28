@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -27,7 +28,7 @@ func main() {
 	}
 	defer postgres.Close()
 	authManager := auth.NewManager(env("JWT_SECRET", "change-me-in-production"))
-	if err := ensureSeedData(ctx, postgres, authManager, env("ADMIN_EMAIL", "admin@example.com"), env("ADMIN_PASSWORD", "admin")); err != nil {
+	if err := ensureSeedData(ctx, postgres, authManager, env("ADMIN_EMAIL", "admin@example.com"), env("ADMIN_PASSWORD", "admin"), env("MODE", "production")); err != nil {
 		log.Fatalf("ensure seed data: %v", err)
 	}
 	ingestClient, err := ingest.NewClient(env("REDIS_URL", "redis://localhost:6379/0"), env("REDIS_STREAM", ingest.DefaultStream))
@@ -51,11 +52,20 @@ func main() {
 	}
 	defer engine.Close()
 	go func() {
-		err := consumer.Consume(ctx, func(ctx context.Context, event parser.NormalizedEvent) error {
-			if err := elastic.IndexEvent(ctx, event); err != nil {
+		err := consumer.ConsumeBatch(ctx, envInt("PARSER_BATCH_SIZE", 100), envInt("PARSER_WORKERS", 4), func(ctx context.Context, events []parser.NormalizedEvent) error {
+			bulk := make([]any, len(events))
+			for index := range events {
+				bulk[index] = events[index]
+			}
+			if err := elastic.BulkIndexEvents(ctx, bulk); err != nil {
 				return err
 			}
-			return engine.Process(ctx, event)
+			for _, event := range events {
+				if err := engine.Process(ctx, event); err != nil {
+					return err
+				}
+			}
+			return nil
 		})
 		if err != nil && ctx.Err() == nil {
 			log.Printf("parser stopped: %v", err)
@@ -82,7 +92,7 @@ func main() {
 	_ = server.Shutdown(shutdownCtx)
 }
 
-func ensureSeedData(ctx context.Context, postgres *pgxpool.Pool, manager *auth.Manager, defaultAdminEmail, defaultAdminPass string) error {
+func ensureSeedData(ctx context.Context, postgres *pgxpool.Pool, manager *auth.Manager, defaultAdminEmail, defaultAdminPass, mode string) error {
 	// Apply columns migration for alerts table
 	_, _ = postgres.Exec(ctx, `
 		ALTER TABLE alerts ADD COLUMN IF NOT EXISTS entity_key TEXT;
@@ -91,16 +101,20 @@ func ensureSeedData(ctx context.Context, postgres *pgxpool.Pool, manager *auth.M
 		CREATE INDEX IF NOT EXISTS idx_alerts_rule_entity ON alerts (rule_id, entity_key, status);
 	`)
 
-	demoUsers := []struct {
+	users := []struct {
 		Email, Password, Name, Role string
 	}{
 		{Email: defaultAdminEmail, Password: defaultAdminPass, Name: "System Administrator", Role: "admin"},
-		{Email: "admin@example.com", Password: "admin", Name: "SOC Administrator", Role: "admin"},
-		{Email: "analyst@example.com", Password: "analyst", Name: "SOC Analyst", Role: "analyst"},
-		{Email: "viewer@example.com", Password: "viewer", Name: "SOC Observer", Role: "viewer"},
+	}
+	if mode == "develop" {
+		users = append(users,
+			struct{ Email, Password, Name, Role string }{Email: "admin@example.com", Password: "admin", Name: "SOC Administrator", Role: "admin"},
+			struct{ Email, Password, Name, Role string }{Email: "analyst@example.com", Password: "analyst", Name: "SOC Analyst", Role: "analyst"},
+			struct{ Email, Password, Name, Role string }{Email: "viewer@example.com", Password: "viewer", Name: "SOC Observer", Role: "viewer"},
+		)
 	}
 
-	for _, u := range demoUsers {
+	for _, u := range users {
 		var exists bool
 		if err := postgres.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM users WHERE lower(email)=lower($1))`, u.Email).Scan(&exists); err != nil {
 			return err
@@ -117,7 +131,11 @@ func ensureSeedData(ctx context.Context, postgres *pgxpool.Pool, manager *auth.M
 		}
 	}
 
-	// Seed demo assets if none exist
+	if mode != "develop" {
+		return nil
+	}
+
+	// Seed demo assets only for local development.
 	var assetCount int
 	if err := postgres.QueryRow(ctx, `SELECT COUNT(*) FROM assets`).Scan(&assetCount); err != nil {
 		return err
@@ -153,4 +171,12 @@ func env(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func envInt(key string, fallback int) int {
+	value, err := strconv.Atoi(env(key, strconv.Itoa(fallback)))
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	return value
 }

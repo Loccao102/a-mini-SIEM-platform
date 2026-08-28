@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -115,22 +116,68 @@ func (elastic *Elasticsearch) EnsureIndex(ctx context.Context) error {
 }
 
 func (elastic *Elasticsearch) IndexEvent(ctx context.Context, event any) error {
-	payload, err := json.Marshal(event)
+	return elastic.BulkIndexEvents(ctx, []any{event})
+}
+
+func (elastic *Elasticsearch) BulkIndexEvents(ctx context.Context, events []any) error {
+	if len(events) == 0 {
+		return nil
+	}
+	var payload bytes.Buffer
+	for _, event := range events {
+		encoded, err := json.Marshal(event)
+		if err != nil {
+			return err
+		}
+		metadata := map[string]any{"index": map[string]any{"_index": "normalized_events"}}
+		var fields map[string]any
+		if err := json.Unmarshal(encoded, &fields); err == nil {
+			if eventID, ok := fields["event_id"].(string); ok && eventID != "" {
+				metadata["index"].(map[string]any)["_id"] = eventID
+			}
+		}
+		metadataJSON, err := json.Marshal(metadata)
+		if err != nil {
+			return err
+		}
+		payload.Write(metadataJSON)
+		payload.WriteByte('\n')
+		payload.Write(encoded)
+		payload.WriteByte('\n')
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, elastic.baseURL+"/normalized_events/_bulk", &payload)
 	if err != nil {
 		return err
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, elastic.baseURL+"/normalized_events/_doc", bytes.NewReader(payload))
-	if err != nil {
-		return err
-	}
-	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Content-Type", "application/x-ndjson")
 	response, err := elastic.client.Do(request)
 	if err != nil {
 		return err
 	}
 	defer response.Body.Close()
 	if response.StatusCode >= 300 {
-		return fmt.Errorf("index Elasticsearch event: %s", response.Status)
+		body, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
+		return fmt.Errorf("bulk index Elasticsearch events: %s: %s", response.Status, strings.TrimSpace(string(body)))
+	}
+	var result struct {
+		Errors bool `json:"errors"`
+		Items  []map[string]struct {
+			Status int             `json:"status"`
+			Error  json.RawMessage `json:"error"`
+		} `json:"items"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+		return err
+	}
+	if result.Errors {
+		for index, item := range result.Items {
+			for operation, detail := range item {
+				if detail.Status >= 300 {
+					return fmt.Errorf("bulk index event %d (%s): %s", index, operation, string(detail.Error))
+				}
+			}
+		}
+		return fmt.Errorf("bulk index Elasticsearch events returned item errors")
 	}
 	return nil
 }

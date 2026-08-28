@@ -26,7 +26,19 @@ func (handler *Handler) rulesRoute(response http.ResponseWriter, request *http.R
 			writeError(response, http.StatusForbidden, fmt.Errorf("analyst or admin role is required"))
 			return
 		}
-		_, err := handler.postgres.Exec(request.Context(), `DELETE FROM rules WHERE rule_id=$1`, id)
+		transaction, err := handler.postgres.Begin(request.Context())
+		if err != nil {
+			writeError(response, 500, err)
+			return
+		}
+		defer transaction.Rollback(request.Context())
+		_, err = transaction.Exec(request.Context(), `DELETE FROM rules WHERE rule_id=$1`, id)
+		if err == nil {
+			err = recordAudit(request.Context(), transaction, claims.UserID, "rule.deleted", "rule", id, nil)
+		}
+		if err == nil {
+			err = transaction.Commit(request.Context())
+		}
 		if err != nil {
 			writeError(response, http.StatusInternalServerError, err)
 			return
@@ -72,7 +84,19 @@ func (handler *Handler) rulesRoute(response http.ResponseWriter, request *http.R
 		enabled = *payload.Enabled
 	}
 	if id > 0 {
-		_, err := handler.postgres.Exec(request.Context(), `UPDATE rules SET name=$1, description=$2, regex_pattern=$3, target_field=$4, condition=$5, severity=$6, category=$7, enabled=$8 WHERE rule_id=$9`, payload.Name, payload.Description, payload.RegexPattern, payload.TargetField, condition, payload.Severity, payload.Category, enabled, id)
+		transaction, err := handler.postgres.Begin(request.Context())
+		if err != nil {
+			writeError(response, 500, err)
+			return
+		}
+		defer transaction.Rollback(request.Context())
+		_, err = transaction.Exec(request.Context(), `UPDATE rules SET name=$1, description=$2, regex_pattern=$3, target_field=$4, condition=$5, severity=$6, category=$7, enabled=$8 WHERE rule_id=$9`, payload.Name, payload.Description, payload.RegexPattern, payload.TargetField, condition, payload.Severity, payload.Category, enabled, id)
+		if err == nil {
+			err = recordAudit(request.Context(), transaction, claims.UserID, "rule.updated", "rule", id, payload)
+		}
+		if err == nil {
+			err = transaction.Commit(request.Context())
+		}
 		if err != nil {
 			writeError(response, 500, err)
 			return
@@ -81,7 +105,19 @@ func (handler *Handler) rulesRoute(response http.ResponseWriter, request *http.R
 		return
 	}
 	var newID int64
-	err := handler.postgres.QueryRow(request.Context(), `INSERT INTO rules (name, description, regex_pattern, target_field, condition, severity, category, enabled) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING rule_id`, payload.Name, payload.Description, payload.RegexPattern, payload.TargetField, condition, payload.Severity, payload.Category, enabled).Scan(&newID)
+	transaction, err := handler.postgres.Begin(request.Context())
+	if err != nil {
+		writeError(response, 500, err)
+		return
+	}
+	defer transaction.Rollback(request.Context())
+	err = transaction.QueryRow(request.Context(), `INSERT INTO rules (name, description, regex_pattern, target_field, condition, severity, category, enabled) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING rule_id`, payload.Name, payload.Description, payload.RegexPattern, payload.TargetField, condition, payload.Severity, payload.Category, enabled).Scan(&newID)
+	if err == nil {
+		err = recordAudit(request.Context(), transaction, claims.UserID, "rule.created", "rule", newID, payload)
+	}
+	if err == nil {
+		err = transaction.Commit(request.Context())
+	}
 	if err != nil {
 		writeError(response, 500, err)
 		return
@@ -114,8 +150,22 @@ func (handler *Handler) alertsRoute(response http.ResponseWriter, request *http.
 		writeError(response, 400, fmt.Errorf("status must be open, acknowledged, or closed"))
 		return
 	}
-	_, err = handler.postgres.Exec(request.Context(), `UPDATE alerts SET status=$1, assigned_to=NULLIF($2,'') WHERE alert_id=$3`, payload.Status, payload.AssignedTo, id)
+	transaction, err := handler.postgres.Begin(request.Context())
 	if err != nil {
+		writeError(response, 500, err)
+		return
+	}
+	defer transaction.Rollback(request.Context())
+	_, err = transaction.Exec(request.Context(), `UPDATE alerts SET status=$1, assigned_to=NULLIF($2,'') WHERE alert_id=$3`, payload.Status, payload.AssignedTo, id)
+	if err != nil {
+		writeError(response, 500, err)
+		return
+	}
+	if err = recordAudit(request.Context(), transaction, claims.UserID, "alert.updated", "alert", id, map[string]any{"status": payload.Status, "assigned_to": payload.AssignedTo}); err != nil {
+		writeError(response, 500, err)
+		return
+	}
+	if err = transaction.Commit(request.Context()); err != nil {
 		writeError(response, 500, err)
 		return
 	}
@@ -156,7 +206,20 @@ func (handler *Handler) usersRoute(response http.ResponseWriter, request *http.R
 			writeError(response, http.StatusBadRequest, fmt.Errorf("user id is required"))
 			return
 		}
-		_, err := handler.postgres.Exec(request.Context(), `UPDATE users SET enabled=false, updated_at=now() WHERE user_id=$1`, id)
+		claims := handler.claims(request)
+		transaction, err := handler.postgres.Begin(request.Context())
+		if err != nil {
+			writeError(response, 500, err)
+			return
+		}
+		defer transaction.Rollback(request.Context())
+		_, err = transaction.Exec(request.Context(), `UPDATE users SET enabled=false, updated_at=now() WHERE user_id=$1`, id)
+		if err == nil {
+			err = recordAudit(request.Context(), transaction, claims.UserID, "user.disabled", "user", id, nil)
+		}
+		if err == nil {
+			err = transaction.Commit(request.Context())
+		}
 		if err != nil {
 			writeError(response, 500, err)
 			return
@@ -180,7 +243,19 @@ func (handler *Handler) usersRoute(response http.ResponseWriter, request *http.R
 		return
 	}
 	var id int64
-	err = handler.postgres.QueryRow(request.Context(), `INSERT INTO users(email,password_hash,display_name,role) VALUES($1,$2,$3,$4) RETURNING user_id`, payload.Email, hash, payload.DisplayName, payload.Role).Scan(&id)
+	transaction, err := handler.postgres.Begin(request.Context())
+	if err != nil {
+		writeError(response, 500, err)
+		return
+	}
+	defer transaction.Rollback(request.Context())
+	err = transaction.QueryRow(request.Context(), `INSERT INTO users(email,password_hash,display_name,role) VALUES($1,$2,$3,$4) RETURNING user_id`, payload.Email, hash, payload.DisplayName, payload.Role).Scan(&id)
+	if err == nil {
+		err = recordAudit(request.Context(), transaction, handler.claims(request).UserID, "user.created", "user", id, map[string]any{"email": payload.Email, "role": payload.Role})
+	}
+	if err == nil {
+		err = transaction.Commit(request.Context())
+	}
 	if err != nil {
 		writeError(response, 409, err)
 		return

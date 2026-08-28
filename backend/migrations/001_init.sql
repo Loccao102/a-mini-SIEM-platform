@@ -1,6 +1,6 @@
 CREATE TABLE IF NOT EXISTS assets (
     asset_id BIGSERIAL PRIMARY KEY,
-    hostname TEXT NOT NULL,
+    hostname TEXT NOT NULL UNIQUE,
     ip_address INET,
     os_type TEXT NOT NULL,
     criticality TEXT NOT NULL DEFAULT 'medium',

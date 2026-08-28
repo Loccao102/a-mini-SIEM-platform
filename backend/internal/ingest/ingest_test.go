@@ -37,3 +37,24 @@ func TestPublishWritesRawLogFields(t *testing.T) {
 		t.Fatalf("unexpected metadata: %#v", entries[0].Values)
 	}
 }
+
+func TestStatusReportsStreamAndPendingMessages(t *testing.T) {
+	const consumerGroup = "siem-parser"
+	server := miniredis.RunT(t)
+	client := &Client{redis: redis.NewClient(&redis.Options{Addr: server.Addr()}), stream: DefaultStream}
+	defer client.Close()
+
+	if _, err := client.Publish(context.Background(), Message{Raw: "one", Hostname: "web-01", ReceivedAt: time.Now()}); err != nil {
+		t.Fatalf("publish message: %v", err)
+	}
+	if err := client.redis.XGroupCreateMkStream(context.Background(), DefaultStream, consumerGroup, "0").Err(); err != nil {
+		t.Fatalf("create consumer group: %v", err)
+	}
+	status, err := client.Status(context.Background(), consumerGroup)
+	if err != nil {
+		t.Fatalf("read stream status: %v", err)
+	}
+	if status.StreamLength != 1 || status.Pending != 0 || status.Consumers != 0 {
+		t.Fatalf("unexpected stream status: %#v", status)
+	}
+}

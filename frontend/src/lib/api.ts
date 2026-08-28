@@ -18,6 +18,28 @@ export type Alert = {
   summary: string;
 };
 
+export type CaseRecord = {
+  case_id: number;
+  title: string;
+  status: "open" | "investigating" | "resolved" | "closed";
+  classification: "true_positive" | "false_positive" | null;
+  priority: string;
+  assigned_to: number | null;
+  created_by: number;
+  resolution: string | null;
+  alert_count?: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CaseTimelineItem = {
+  kind: "note" | "audit";
+  id: number;
+  actor_user_id: number;
+  body: string;
+  created_at: string;
+};
+
 export type EventRecord = {
   event_id?: string;
   event_time?: string;
@@ -112,6 +134,38 @@ export function updateAlert(id: number, status: string, assignedTo = "") {
   });
 }
 
+export function getCases() {
+  return request<CaseRecord[]>("/api/v1/cases");
+}
+
+export function createCase(title: string, priority = "medium", alertId?: number) {
+  return request<{ case_id: number }>("/api/v1/cases", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title, priority, alert_id: alertId }),
+  });
+}
+
+export function updateCase(id: number, update: Partial<Pick<CaseRecord, "title" | "status" | "classification" | "priority" | "resolution">> & { assigned_to?: number | null }) {
+  return request<{ case_id: number }>(`/api/v1/cases/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(update),
+  });
+}
+
+export function addCaseNote(id: number, body: string) {
+  return request<{ note_id: number }>(`/api/v1/cases/${id}/notes`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ body }),
+  });
+}
+
+export function getCaseTimeline(id: number) {
+  return request<CaseTimelineItem[]>(`/api/v1/cases/${id}/timeline`);
+}
+
 export async function getEvents(limit = 100) {
   const payload = await request<{ hits?: { hits?: Array<{ _source?: EventRecord }> } }>(`/api/v1/events?limit=${limit}`);
   return payload.hits?.hits?.map((hit) => hit._source ?? {}) ?? [];
@@ -123,6 +177,20 @@ export function getRules() {
 
 export function getAssets() {
   return request<Asset[]>("/api/v1/assets");
+}
+
+export function createAsset(asset: {
+  hostname: string;
+  ip_address?: string;
+  os_type: string;
+  criticality?: string;
+  owner?: string;
+}) {
+  return request<{ asset_id: number; hostname: string }>("/api/v1/assets", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(asset),
+  });
 }
 
 export function createRule(

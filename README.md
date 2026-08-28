@@ -37,9 +37,19 @@ Mo `.env` va doi it nhat:
 ```dotenv
 JWT_SECRET=mot_chuoi_bi_mat_dai_va_ngau_nhien
 ADMIN_PASSWORD=mat_khau_admin_toi_thieu_8_ky_tu
+# Chi bat du lieu demo khi can chay moi truong demo
+MODE=production
 ```
 
 `ADMIN_PASSWORD` chi duoc dung de tao admin lan dau. Neu PostgreSQL volume da ton tai, doi bien nay khong doi password cu.
+Du lieu demo (tai khoan mau, assets mau va cac nut/kich ban demo tren UI) chi duoc bat khi dat `MODE=develop`.
+
+De xoa toan bo du lieu local va khoi dong lai tu trang thai rong:
+
+```powershell
+docker compose down -v
+docker compose up -d --build
+```
 
 Khoi dong:
 
@@ -111,6 +121,25 @@ Kiem tra raw log trong Redis:
 ```powershell
 docker compose exec redis redis-cli XRANGE siem:raw-logs - +
 ```
+
+Phan biet log da di qua tung buoc:
+
+```powershell
+# Logstash da nhan Beats va co gui HTTP thanh cong hay khong
+docker compose logs --tail=100 logstash
+
+# Redis stream co message, consumer group dang xu ly bao nhieu message
+docker compose exec redis redis-cli XLEN siem:raw-logs
+docker compose exec redis redis-cli XINFO GROUPS siem:raw-logs
+```
+
+Hoac xem JSON trang thai da tong hop (can JWT viewer+):
+
+```powershell
+Invoke-RestMethod http://localhost:8080/api/v1/pipeline/status -Headers @{ Authorization = "Bearer $token" }
+```
+
+`POST /api/v1/ingest` tra `202` khi backend da ghi log vao Redis. Trong ket qua status, `pending > 0` nghia la Redis da nhan nhung parser chua ACK; `pending = 0` nghia la consumer group da ACK het batch. Kiem tra Elasticsearch de xac nhan event da duoc index.
 
 Lenh producer tren chi kiem tra truc tiep Redis. De kiem tra dung luong monitoring qua HTTP API va dang ky asset, dung:
 
@@ -252,6 +281,7 @@ Sau khi Parser xu ly xong, mo `http://localhost:3000`. Overview, Alerts va Log E
 | `POST /api/v1/auth/login` | public | Dang nhap, tra JWT 12 gio |
 | `POST /api/v1/ingest` | public local | Nhan log tu agent |
 | `GET /api/v1/summary` | viewer+ | Metrics dashboard |
+| `GET /api/v1/pipeline/status` | viewer+ | Redis stream length, pending messages va consumer count |
 | `GET /api/v1/events?limit=100` | viewer+ | Event tu Elasticsearch |
 | `GET /api/v1/assets` | viewer+ | Host va log source |
 | `GET /api/v1/rules` | viewer+ | Danh sach rule |
