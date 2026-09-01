@@ -40,10 +40,11 @@ services:
     volumes:
       - elasticsearch_data:/usr/share/elasticsearch/data
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:9200/_cluster/health || exit 1"]
+      test: ["CMD-SHELL", "curl -s http://localhost:9200/_cat/health | grep -qE 'green|yellow'"]
       interval: 10s
-      timeout: 5s
-      retries: 20
+      timeout: 10s
+      retries: 15
+      start_period: 40s
 
   backend:
     build: ./backend
@@ -74,9 +75,10 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+      start_period: 15s
 
   logstash:
-    image: docker.elastic.co/logstash/logstash:9.5.2
+    image: docker.elastic.co/logstash/logstash:9.2.0
     volumes:
       - ./config/logstash-pipeline.conf:/usr/share/logstash/pipeline/logstash.conf:ro
     ports:
@@ -92,7 +94,7 @@ services:
       REDIS_URL: redis://redis:6379/0
     depends_on:
       redis:
-        condition: service_started
+        condition: service_healthy
 
   frontend:
     build: ./frontend
@@ -102,7 +104,8 @@ services:
     ports:
       - "${FRONTEND_PORT:-3000}:3000"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
 
 volumes:
   postgres_data:
