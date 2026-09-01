@@ -1,0 +1,62 @@
+agent:
+  id: ${AGENT_ID:siem-local-agent}
+  monitoring:
+    enabled: false
+
+fleet:
+  enabled: true
+  hosts: ["${FLEET_SERVER_HOST:localhost}:8220"]
+  ssl:
+    verification_mode: none
+
+inputs:
+  - type: logfile
+    id: linux-syslog
+    enabled: true
+    paths:
+      - /var/log/auth.log
+      - /var/log/syslog
+    processors:
+      - add_fields:
+          target: ""
+          fields:
+            source_type: linux_sshd
+            host.os.type: linux
+
+  - type: winlog
+    id: windows-events
+    enabled: false
+    event_logs:
+      - name: Security
+      - name: System
+    processors:
+      - add_fields:
+          target: ""
+          fields:
+            source_type: windows_eventlog
+            host.os.type: windows
+
+  - type: docker
+    id: docker-logs
+    enabled: true
+    containers:
+      stream: all
+      path: /var/lib/docker/containers
+      formats:
+        - container
+    processors:
+      - add_fields:
+          target: ""
+          fields:
+            source_type: docker
+
+outputs:
+  default:
+    type: logstash
+    hosts: ["${SIEM_LOGSTASH_HOST:logstash}:5044"]
+    ssl:
+      verification_mode: none
+
+processors:
+  - add_host_metadata: ~
+  - add_cloud_metadata: ~

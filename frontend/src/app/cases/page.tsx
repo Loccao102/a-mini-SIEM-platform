@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 import { addCaseNote, ApiError, CaseRecord, CaseTimelineItem, createCase, getCaseTimeline, getCases, updateCase } from "@/lib/api";
+import { SeverityBadge } from "@/components/severity-badge";
 
 export default function CasesPage() {
   const [cases, setCases] = useState<CaseRecord[]>([]);
@@ -81,15 +82,15 @@ export default function CasesPage() {
           {message && <p className="notice">{message}</p>}
           {!cases.length && <p className="empty-state">Chưa có case nào.</p>}
           {cases.map((item) => (
-            <button key={item.case_id} type="button" onClick={() => void selectCase(item)} className="data-row mb-2 block w-full text-left">
+            <button key={item.case_id} type="button" onClick={() => void selectCase(item)} className={`data-row case-row ${selected?.case_id === item.case_id ? "selected" : ""}`}>
               <strong>{item.title}</strong>
-              <small>{item.status} · {item.priority} · {item.alert_count ?? 0} alerts · cập nhật {new Date(item.updated_at).toLocaleString()}</small>
+              <small><span className={`case-priority priority-${item.priority}`}>{item.priority}</span> · {item.status} · {item.alert_count ?? 0} alerts · cập nhật {new Date(item.updated_at).toLocaleString()}</small>
             </button>
           ))}
         </div>
-        <aside className="border border-(--line) bg-(--surface) p-4">
+        <aside className="case-detail border border-(--line) bg-(--surface) p-4">
           {!selected ? <p className="empty-state">Chọn một case để xem timeline.</p> : <>
-            <h2>{selected.title}</h2>
+            <div className="case-detail-heading"><div><span className="eyebrow">Incident detail</span><h2>{selected.title}</h2></div><SeverityBadge severity={selected.priority} /></div>
             <select value={selected.status} onChange={(event) => void handleStatus(event.target.value as CaseRecord["status"])}>
               <option value="open">Open</option><option value="investigating">Investigating</option><option value="resolved">Resolved</option><option value="closed">Closed</option>
             </select>

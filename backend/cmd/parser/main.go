@@ -9,9 +9,11 @@ import (
 	"strconv"
 	"syscall"
 
+	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/dedup"
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/ingest"
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/parser"
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/storage"
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -21,6 +23,13 @@ func main() {
 	}
 	defer consumer.Close()
 	elastic := storage.NewElasticsearch(env("ELASTICSEARCH_URL", "http://localhost:9200"))
+	// Create Redis client for dedup manager
+	redisOpts, err := redis.ParseURL(env("REDIS_URL", "redis://localhost:6379/0"))
+	if err != nil {
+		log.Fatalf("parse redis url: %v", err)
+	}
+	redisClient := redis.NewClient(redisOpts)
+	dedupManager := dedup.NewManager(redisClient)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := elastic.EnsureIndex(ctx); err != nil {
@@ -30,6 +39,14 @@ func main() {
 	if err := consumer.ConsumeBatch(ctx, envInt("PARSER_BATCH_SIZE", 100), envInt("PARSER_WORKERS", 4), func(ctx context.Context, events []parser.NormalizedEvent) error {
 		bulk := make([]any, len(events))
 		for index, event := range events {
+			// Track event vào dedup Redis
+			if group, err := dedupManager.TrackEvent(ctx, event.Fingerprint, event.EventID, event.EventTime); err == nil && group != nil {
+				event.DuplicateCount = group.Count
+				event.FirstSeen = group.FirstSeen
+				event.LastSeen = group.LastSeen
+			} else if err != nil {
+				log.Printf("dedup track error: %v", err)
+			}
 			encoded, err := json.Marshal(event)
 			if err != nil {
 				return err

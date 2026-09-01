@@ -51,7 +51,11 @@ export type EventRecord = {
   log_category?: string;
   src_ip?: string;
   username?: string;
+  fingerprint?: string;
   duplicate_count?: number;
+  first_seen?: string;
+  last_seen?: string;
+  raw?: string;
   extra_fields?: Record<string, string>;
   [key: string]: unknown;
 };
@@ -166,9 +170,12 @@ export function getCaseTimeline(id: number) {
   return request<CaseTimelineItem[]>(`/api/v1/cases/${id}/timeline`);
 }
 
-export async function getEvents(limit = 100) {
-  const payload = await request<{ hits?: { hits?: Array<{ _source?: EventRecord }> } }>(`/api/v1/events?limit=${limit}`);
-  return payload.hits?.hits?.map((hit) => hit._source ?? {}) ?? [];
+export async function getEvents(options: { page?: number; pageSize?: number; q?: string; severity?: string; category?: string; host?: string; from?: string; to?: string } = {}) {
+  const params = new URLSearchParams({ page: String(options.page ?? 1), page_size: String(options.pageSize ?? 25) });
+  for (const [key, value] of Object.entries({ q: options.q, severity: options.severity, category: options.category, host: options.host, from: options.from, to: options.to })) {
+    if (value) params.set(key, value);
+  }
+  return request<{ items: EventRecord[]; total: number; page: number; page_size: number }>(`/api/v1/events?${params}`);
 }
 
 export function getRules() {

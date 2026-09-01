@@ -51,3 +51,27 @@ func TestResourceRoutesRejectUnsupportedMethods(t *testing.T) {
 		})
 	}
 }
+
+func TestNormalizeFleetEnrollment(t *testing.T) {
+	payload := fleetEnrollmentRequest{
+		Hostname:    "web-02",
+		SourceTypes: []string{"system", "docker"},
+		Tags:        map[string]string{"env": "prod"},
+	}
+	result, err := normalizeFleetEnrollment(payload)
+	if err != nil {
+		t.Fatalf("normalizeFleetEnrollment returned error: %v", err)
+	}
+	if result.OSType != "linux" {
+		t.Fatalf("expected default os_type linux, got %q", result.OSType)
+	}
+	if result.AgentID != "fleet-agent" {
+		t.Fatalf("expected default agent_id fleet-agent, got %q", result.AgentID)
+	}
+	if len(result.SourceTypes) != 2 {
+		t.Fatalf("expected 2 source types, got %d", len(result.SourceTypes))
+	}
+	if result.Tags["fleet.agent_id"] != "fleet-agent" {
+		t.Fatalf("fleet agent tag not normalized: %#v", result.Tags)
+	}
+}

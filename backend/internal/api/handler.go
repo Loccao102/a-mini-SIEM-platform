@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -9,30 +10,64 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/apikey"
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/auth"
+	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/dedup"
+	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/dlq"
+	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/health"
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/ingest"
+	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/metrics"
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/parser"
+	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/ratelimit"
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/storage"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Handler struct {
-	postgres *pgxpool.Pool
-	elastic  *storage.Elasticsearch
-	ingest   *ingest.Client
-	auth     *auth.Manager
+	postgres        *pgxpool.Pool
+	elastic         *storage.Elasticsearch
+	ingest          *ingest.Client
+	auth            *auth.Manager
+	dedup           *dedup.Manager
+	apiKeyManager   *apikey.Manager
+	rateLimiter     *ratelimit.Limiter
+	dlqManager      *dlq.Manager
+	healthChecker   *health.HealthChecker
+	metrics         *metrics.QueueMetrics
 }
 
-func New(postgres *pgxpool.Pool, elastic *storage.Elasticsearch, ingestClient *ingest.Client, authManager *auth.Manager) *Handler {
-	return &Handler{postgres: postgres, elastic: elastic, ingest: ingestClient, auth: authManager}
+func New(postgres *pgxpool.Pool, elastic *storage.Elasticsearch, ingestClient *ingest.Client, authManager *auth.Manager, dedupManager *dedup.Manager, apiKeyMgr *apikey.Manager, limiter *ratelimit.Limiter, dlqMgr *dlq.Manager, hc *health.HealthChecker, met *metrics.QueueMetrics) *Handler {
+	return &Handler{
+		postgres:      postgres,
+		elastic:       elastic,
+		ingest:        ingestClient,
+		auth:          authManager,
+		dedup:         dedupManager,
+		apiKeyManager: apiKeyMgr,
+		rateLimiter:   limiter,
+		dlqManager:    dlqMgr,
+		healthChecker: hc,
+		metrics:       met,
+	}
 }
 
 func (handler *Handler) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/v1/auth/login", handler.login)
 	mux.Handle("GET /api/v1/auth/me", handler.requireRole("viewer", http.HandlerFunc(handler.getMe)))
-	mux.HandleFunc("POST /api/v1/ingest", handler.ingestLog)
+	
+	// Ingest endpoint with security middleware: auth + rate limit + size limit
+	ingestSecured := handler.withRequestSizeLimit(MaxPayloadSize)(
+		handler.withRateLimit(
+			handler.withIngestAuth(
+				http.HandlerFunc(handler.ingestLog),
+			),
+		),
+	)
+	mux.Handle("POST /api/v1/ingest", ingestSecured)
+	
+	mux.HandleFunc("POST /api/v1/fleet/agents", handler.fleetAgentEnroll)
 	mux.Handle("POST /api/v1/rules/test-regex", handler.requireRole("viewer", http.HandlerFunc(handler.testRegex)))
 	mux.Handle("GET /api/v1/summary", handler.requireRole("viewer", http.HandlerFunc(handler.summary)))
 	mux.Handle("GET /api/v1/pipeline/status", handler.requireRole("viewer", http.HandlerFunc(handler.pipelineStatus)))
@@ -51,6 +86,16 @@ func (handler *Handler) Routes() http.Handler {
 	mux.Handle("/api/v1/cases/{id}/alerts/{alert_id}", handler.requireRole("analyst", http.HandlerFunc(handler.caseAlertRoute)))
 	mux.Handle("/api/v1/users", handler.requireRole("admin", http.HandlerFunc(handler.usersRoute)))
 	mux.Handle("/api/v1/users/{id}", handler.requireRole("admin", http.HandlerFunc(handler.usersRoute)))
+	
+	// Health and monitoring endpoints (no auth required)
+	mux.HandleFunc("GET /healthz", handler.handleHealthz)
+	mux.HandleFunc("GET /metrics", handler.handleMetrics)
+	
+	// DLQ management endpoints
+	mux.Handle("GET /api/v1/dlq/stats", handler.requireRole("analyst", http.HandlerFunc(handler.handleDLQStats)))
+	mux.Handle("POST /api/v1/dlq/replay/{messageId}", handler.requireRole("analyst", http.HandlerFunc(handler.handleDLQReplay)))
+	mux.Handle("DELETE /api/v1/dlq/purge", handler.requireRole("admin", http.HandlerFunc(handler.handleDLQPurge)))
+	
 	return withCORS(mux)
 }
 
@@ -121,6 +166,126 @@ type ingestRequest struct {
 	Agent struct {
 		ID string `json:"id"`
 	} `json:"agent"`
+}
+
+type fleetEnrollmentRequest struct {
+	AgentID     string            `json:"agent_id"`
+	Hostname    string            `json:"hostname"`
+	IPAddress   *string           `json:"ip_address"`
+	OSType      string            `json:"os_type"`
+	SourceTypes []string          `json:"source_types"`
+	Tags        map[string]string `json:"tags"`
+}
+
+func normalizeFleetEnrollment(payload fleetEnrollmentRequest) (fleetEnrollmentRequest, error) {
+	payload.Hostname = strings.TrimSpace(payload.Hostname)
+	payload.OSType = strings.TrimSpace(strings.ToLower(payload.OSType))
+	if payload.Hostname == "" {
+		return payload, fmt.Errorf("hostname is required")
+	}
+	if payload.OSType == "" {
+		payload.OSType = "linux"
+	}
+	if payload.AgentID == "" {
+		payload.AgentID = "fleet-agent"
+	}
+	if len(payload.SourceTypes) == 0 {
+		payload.SourceTypes = []string{"elastic_agent"}
+	}
+	if payload.Tags == nil {
+		payload.Tags = map[string]string{}
+	}
+	payload.Tags["fleet.agent_id"] = payload.AgentID
+	return payload, nil
+}
+
+func (handler *Handler) fleetAgentEnroll(response http.ResponseWriter, request *http.Request) {
+	var payload fleetEnrollmentRequest
+	if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+		writeError(response, http.StatusBadRequest, fmt.Errorf("invalid fleet enrollment payload"))
+		return
+	}
+	payload, err := normalizeFleetEnrollment(payload)
+	if err != nil {
+		writeError(response, http.StatusBadRequest, err)
+		return
+	}
+	assetID, err := handler.upsertFleetAsset(request.Context(), payload)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, err)
+		return
+	}
+	for _, sourceType := range payload.SourceTypes {
+		if err := handler.registerLogSourceWithAssetID(request.Context(), assetID, sourceType, payload.AgentID); err != nil {
+			writeError(response, http.StatusInternalServerError, err)
+			return
+		}
+	}
+	writeJSON(response, http.StatusAccepted, map[string]any{
+		"status":       "registered",
+		"asset_id":     assetID,
+		"hostname":     payload.Hostname,
+		"agent_id":     payload.AgentID,
+		"source_types": payload.SourceTypes,
+	})
+}
+
+func (handler *Handler) upsertFleetAsset(ctx context.Context, payload fleetEnrollmentRequest) (int64, error) {
+	tagBytes, err := json.Marshal(payload.Tags)
+	if err != nil {
+		return 0, err
+	}
+	var assetID int64
+	if payload.IPAddress != nil {
+		_, err = handler.postgres.Exec(ctx, `
+			INSERT INTO assets (hostname, ip_address, os_type, criticality, owner, tags)
+			VALUES ($1, $2::inet, $3, 'medium', NULL, $4::jsonb)
+			ON CONFLICT (hostname) DO UPDATE SET
+				ip_address = EXCLUDED.ip_address,
+				os_type = EXCLUDED.os_type,
+				tags = COALESCE(assets.tags, '{}'::jsonb) || EXCLUDED.tags
+			RETURNING asset_id
+		`, payload.Hostname, strings.TrimSpace(*payload.IPAddress), payload.OSType, string(tagBytes))
+		if err != nil {
+			return 0, err
+		}
+	} else {
+		err = handler.postgres.QueryRow(ctx, `
+			INSERT INTO assets (hostname, ip_address, os_type, criticality, owner, tags)
+			VALUES ($1, NULL, $2, 'medium', NULL, $3::jsonb)
+			ON CONFLICT (hostname) DO UPDATE SET
+				os_type = EXCLUDED.os_type,
+				tags = COALESCE(assets.tags, '{}'::jsonb) || EXCLUDED.tags
+			RETURNING asset_id
+		`, payload.Hostname, payload.OSType, string(tagBytes)).Scan(&assetID)
+		if err != nil {
+			return 0, err
+		}
+	}
+	if payload.IPAddress == nil {
+		if err := handler.postgres.QueryRow(ctx, `SELECT asset_id FROM assets WHERE LOWER(hostname) = LOWER($1)`, payload.Hostname).Scan(&assetID); err != nil {
+			return 0, err
+		}
+	}
+	return assetID, nil
+}
+
+func (handler *Handler) registerLogSourceWithAssetID(ctx context.Context, assetID int64, sourceType, agentID string) error {
+	result, err := handler.postgres.Exec(ctx, `
+		INSERT INTO log_sources (asset_id, source_type, agent_id, status, last_seen)
+		VALUES ($1, $2, $3, 'active', now())
+		ON CONFLICT (asset_id, source_type) DO UPDATE SET
+			agent_id = EXCLUDED.agent_id,
+			status = 'active',
+			last_seen = now()
+	`, assetID, sourceType, agentID)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return nil
+	}
+	return nil
 }
 
 func (handler *Handler) ingestLog(response http.ResponseWriter, request *http.Request) {
@@ -245,16 +410,63 @@ func valueOrEmpty(value *string) string {
 }
 
 func (handler *Handler) events(response http.ResponseWriter, request *http.Request) {
-	limit := 100
-	if value, err := strconv.Atoi(request.URL.Query().Get("limit")); err == nil && value > 0 && value <= 500 {
-		limit = value
+	values := request.URL.Query()
+	page, _ := strconv.Atoi(values.Get("page"))
+	if page < 1 { page = 1 }
+	pageSize, _ := strconv.Atoi(values.Get("page_size"))
+	if pageSize != 25 && pageSize != 50 && pageSize != 100 { pageSize = 25 }
+	must := make([]any, 0, 5)
+	if query := strings.TrimSpace(values.Get("q")); query != "" {
+		// Build bool query with should clauses for both exact match and prefix/wildcard match
+		should := make([]any, 0)
+		// Exact word match on multiple fields
+		should = append(should, map[string]any{"multi_match": map[string]any{"query": query, "fields": []string{"message", "hostname", "log_category", "event_type", "username"}}})
+		// Wildcard match for substring search (case-insensitive via lowercase)
+		lowerQuery := strings.ToLower(query)
+		should = append(should, map[string]any{"wildcard": map[string]any{"message": map[string]any{"value": "*" + lowerQuery + "*", "case_insensitive": true}}})
+		should = append(should, map[string]any{"wildcard": map[string]any{"hostname": map[string]any{"value": "*" + lowerQuery + "*", "case_insensitive": true}}})
+		
+		must = append(must, map[string]any{"bool": map[string]any{"should": should, "minimum_should_match": 1}})
 	}
-	result, err := handler.elastic.Search(request.Context(), map[string]any{"size": limit, "sort": []any{map[string]any{"event_time": "desc"}}, "query": map[string]any{"match_all": map[string]any{}}})
+	for field := range map[string]bool{"severity.keyword": true, "log_category.keyword": true, "hostname.keyword": true} {
+		param := strings.TrimSuffix(field, ".keyword")
+		if value := strings.TrimSpace(values.Get(param)); value != "" { must = append(must, map[string]any{"term": map[string]any{field: value}}) }
+	}
+	if from, to := values.Get("from"), values.Get("to"); from != "" || to != "" {
+		rangeQuery := map[string]any{}
+		if from != "" { rangeQuery["gte"] = from }
+		if to != "" { rangeQuery["lte"] = to }
+		must = append(must, map[string]any{"range": map[string]any{"event_time": rangeQuery}})
+	}
+	query := map[string]any{"from": (page - 1) * pageSize, "size": pageSize, "track_total_hits": true, "sort": []any{map[string]any{"event_time": "desc"}}, "query": map[string]any{"bool": map[string]any{"must": must}}}
+	result, err := handler.elastic.Search(request.Context(), query)
 	if err != nil {
 		writeError(response, http.StatusBadGateway, err)
 		return
 	}
-	writeJSON(response, http.StatusOK, result)
+	var payload struct {
+		Hits struct {
+			Total struct { Value int64 `json:"value"` } `json:"total"`
+			Hits []struct { Source map[string]any `json:"_source"` } `json:"hits"`
+		} `json:"hits"`
+	}
+	if err := json.Unmarshal(result, &payload); err != nil { writeError(response, http.StatusBadGateway, err); return }
+	items := make([]map[string]any, 0, len(payload.Hits.Hits))
+	for _, hit := range payload.Hits.Hits {
+		event := hit.Source
+		// Enrich event với dedup metadata từ Redis
+		if fingerprint, ok := event["fingerprint"].(string); ok && fingerprint != "" {
+			group, err := handler.dedup.GetGroup(request.Context(), fingerprint)
+			if err == nil && group != nil {
+				// Update event với dedup info từ Redis
+				event["duplicate_count"] = group.Count
+				event["first_seen"] = group.FirstSeen
+				event["last_seen"] = group.LastSeen
+			}
+		}
+		items = append(items, event)
+	}
+	writeJSON(response, http.StatusOK, map[string]any{"items": items, "total": payload.Hits.Total.Value, "page": page, "page_size": pageSize})
 }
 
 func (handler *Handler) summary(response http.ResponseWriter, request *http.Request) {

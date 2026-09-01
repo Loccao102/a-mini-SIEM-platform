@@ -11,12 +11,19 @@ import (
 	"time"
 
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/api"
+	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/apikey"
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/auth"
+	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/dedup"
+	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/dlq"
+	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/health"
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/ingest"
+	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/metrics"
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/parser"
+	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/ratelimit"
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/ruleengine"
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/storage"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -36,12 +43,38 @@ func main() {
 		log.Fatalf("create ingest client: %v", err)
 	}
 	defer ingestClient.Close()
-	handler := api.New(postgres, storage.NewElasticsearch(env("ELASTICSEARCH_URL", "http://localhost:9200")), ingestClient, authManager)
+	// Create Redis client for dedup manager
+	redisOpts, err := redis.ParseURL(env("REDIS_URL", "redis://localhost:6379/0"))
+	if err != nil {
+		log.Fatalf("parse redis url: %v", err)
+	}
+	redisClient := redis.NewClient(redisOpts)
+	dedupManager := dedup.NewManager(redisClient)
+	
+	// Initialize API key manager for agent authentication
+	apiKeyMgr := apikey.New(postgres)
+	
+	// Initialize rate limiter (1000 requests per minute per hostname)
+	rateLimiter := ratelimit.New(redisClient, 1000, 1*time.Minute)
+	
+	// Initialize DLQ manager for failed event handling
+	dlqManager := dlq.New(redisClient)
+	if err := dlqManager.EnsureStreams(ctx); err != nil {
+		log.Fatalf("ensure dlq streams: %v", err)
+	}
+	
+	// Initialize health checker
+	healthChecker := health.New(postgres, redisClient)
+	
+	// Initialize metrics collection
+	queueMetrics := metrics.New()
+	
+	// Create handler with all components
+	handler := api.New(postgres, storage.NewElasticsearch(env("ELASTICSEARCH_URL", "http://localhost:9200")), ingestClient, authManager, dedupManager, apiKeyMgr, rateLimiter, dlqManager, healthChecker, queueMetrics)
 	elastic := storage.NewElasticsearch(env("ELASTICSEARCH_URL", "http://localhost:9200"))
 	if err := elastic.EnsureIndex(ctx); err != nil {
 		log.Fatalf("prepare Elasticsearch index: %v", err)
 	}
-	consumer, err := parser.NewConsumer(env("REDIS_URL", "redis://localhost:6379/0"), env("REDIS_STREAM", ingest.DefaultStream), env("PARSER_GROUP", parser.DefaultConsumerGroup), env("PARSER_CONSUMER", "api-parser"))
 	if err != nil {
 		log.Fatalf("create parser consumer: %v", err)
 	}

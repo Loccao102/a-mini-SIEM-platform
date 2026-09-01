@@ -65,44 +65,38 @@ export function NavHeader() {
 
   if (pathname === "/login") return null;
 
+  const navigation = [
+    ["/", "Overview", "overview"],
+    ["/alerts", "Alerts", "alerts"],
+    ["/cases", "Cases", "cases"],
+    ["/events", "Log Explorer", "events"],
+    ["/rules", "Rules", "rules"],
+    ["/assets", "Assets", "assets"],
+    ["/accounts", "Accounts", "accounts"],
+  ] as const;
+
   return (
-    <header className="siem-nav-header">
+    <aside className="siem-nav-header">
       <div className="nav-brand">
         <Link href="/" className="logo-box">
           <span className="mark">S</span>
-          <strong>Sentinel</strong>
-          <span className="version">SIEM v2.0</span>
+          <span><strong>Sentinel</strong><small>Security operations</small></span>
         </Link>
-        <span className="status-pill">
-          <span className="pulse-dot" /> Connected
-        </span>
+        <span className="version">SIEM v2.0</span>
       </div>
 
-      <nav className="nav-links">
-        <Link className={pathname === "/" ? "active" : ""} href="/">
-          Overview
-        </Link>
-        <Link className={pathname === "/alerts" ? "active" : ""} href="/alerts">
-          Alerts
-        </Link>
-        <Link className={pathname === "/cases" ? "active" : ""} href="/cases">
-          Cases
-        </Link>
-        <Link className={pathname === "/events" ? "active" : ""} href="/events">
-          Log Explorer
-        </Link>
-        <Link className={pathname === "/rules" ? "active" : ""} href="/rules">
-          Rules
-        </Link>
-        <Link className={pathname === "/assets" ? "active" : ""} href="/assets">
-          Assets
-        </Link>
-        <Link className={pathname === "/accounts" ? "active" : ""} href="/accounts">
-          Accounts
-        </Link>
+      <nav className="nav-links" aria-label="Primary navigation">
+        <span className="nav-section-label">Operations</span>
+        {navigation.map(([href, label, icon]) => (
+          <Link className={pathname === href ? "active" : ""} href={href} key={href}>
+            <span className={`nav-icon nav-icon-${icon}`} aria-hidden="true" />
+            {label}
+          </Link>
+        ))}
       </nav>
 
       <div className="nav-user">
+        <span className="status-pill"><span className="pulse-dot" /> Live link</span>
         <div className="mode-toggle" aria-label="Application mode">
           <button type="button" className={demoEnabled ? "active" : ""} disabled={!demoModeAvailable} onClick={() => setMode("demo")}>Demo</button>
           <button type="button" className={!demoEnabled ? "active" : ""} onClick={() => setMode("production")}>Production</button>
@@ -125,6 +119,6 @@ export function NavHeader() {
           <span className="nav-user-loading">...</span>
         )}
       </div>
-    </header>
+    </aside>
   );
 }

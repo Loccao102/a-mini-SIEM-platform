@@ -23,6 +23,8 @@ var (
 	pamUnixRhost     = regexp.MustCompile(`(?i)\brhost=(\S+)`)
 )
 
+var volatileLogFields = regexp.MustCompile(`(?i)\b(?:pid|process(?: id)?|logon(?: id)?|session(?: id)?)\s*[=:]\s*[A-Fa-f0-9-]+\b|\[[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][^]]+\]`)
+
 // Linux Audit & Sudo Regexes
 var (
 	sudoExec       = regexp.MustCompile(`(?i)sudo:\s*(\S+)\s*:.*?COMMAND=(.+)$`)
@@ -60,13 +62,15 @@ type NormalizedEvent struct {
 	AgentID        string            `json:"agent_id,omitempty"`
 	DuplicateCount int               `json:"duplicate_count,omitempty"`
 	Fingerprint    string            `json:"fingerprint,omitempty"`
+	FirstSeen      time.Time         `json:"first_seen"`
+	LastSeen       time.Time         `json:"last_seen"`
+	Raw            string            `json:"raw"`
 	Extra          map[string]string `json:"extra_fields,omitempty"`
 }
 
 func Fingerprint(hostname string, t time.Time, rawMessage string) string {
-	timeBucket := t.UTC().Truncate(time.Minute).Format(time.RFC3339)
-	normalizedMsg := strings.TrimSpace(rawMessage)
-	hash := sha256.Sum256([]byte(hostname + ":" + timeBucket + ":" + normalizedMsg))
+	normalizedMsg := strings.Join(strings.Fields(volatileLogFields.ReplaceAllString(rawMessage, "")), " ")
+	hash := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(hostname)) + ":" + normalizedMsg))
 	return hex.EncodeToString(hash[:])
 }
 
@@ -91,6 +95,9 @@ func Parse(message redis.XMessage) NormalizedEvent {
 		Hostname:    hostname,
 		AgentID:     agentID,
 		Fingerprint: Fingerprint(hostname, eventTime, raw),
+		FirstSeen:   eventTime,
+		LastSeen:    eventTime,
+		Raw:         raw,
 		Extra:       make(map[string]string),
 	}
 
@@ -470,12 +477,21 @@ func (consumer *Consumer) ConsumeBatch(ctx context.Context, batchSize, workers i
 						event := Parse(stream.Messages[index])
 						if event.Fingerprint != "" {
 							key := fmt.Sprintf("siem:dedup:log:%s", event.Fingerprint)
+							metaKey := key + ":meta"
 							count, err := consumer.redis.Incr(ctx, key).Result()
 							if err == nil {
 								if count == 1 {
-									_ = consumer.redis.Expire(ctx, key, 5*time.Minute).Err()
+									_ = consumer.redis.Expire(ctx, key, 3*time.Minute).Err()
 								}
 								event.DuplicateCount = int(count)
+								if firstSeen, firstErr := consumer.redis.HGet(ctx, metaKey, "first_seen").Result(); firstErr == redis.Nil {
+									_ = consumer.redis.HSet(ctx, metaKey, "first_seen", event.EventTime.Format(time.RFC3339Nano), "last_seen", event.EventTime.Format(time.RFC3339Nano)).Err()
+									_ = consumer.redis.Expire(ctx, metaKey, 3*time.Minute).Err()
+								} else if firstErr == nil {
+									event.FirstSeen, _ = time.Parse(time.RFC3339Nano, firstSeen)
+									_ = consumer.redis.HSet(ctx, metaKey, "last_seen", event.EventTime.Format(time.RFC3339Nano)).Err()
+									event.LastSeen = event.EventTime
+								}
 								if count > 1 {
 									event.Extra["dedup_status"] = fmt.Sprintf("%dx deduplicated", count)
 								}

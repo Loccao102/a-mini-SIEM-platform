@@ -15,7 +15,8 @@ CREATE TABLE IF NOT EXISTS log_sources (
     source_type TEXT NOT NULL,
     agent_id TEXT,
     status TEXT NOT NULL DEFAULT 'active',
-    last_seen TIMESTAMPTZ
+    last_seen TIMESTAMPTZ,
+    UNIQUE (asset_id, source_type)
 );
 
 CREATE TABLE IF NOT EXISTS rules (

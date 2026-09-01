@@ -4,13 +4,39 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { EventRecord, getEvents, ingestLog } from "@/lib/api";
 
+function groupEvents(events: EventRecord[]) {
+  const groups = new Map<string, EventRecord>();
+  for (const event of events) {
+    const key = event.fingerprint ?? [event.message, event.log_category, event.hostname, event.severity].join("|");
+    const first = groups.get(key);
+    if (!first) { groups.set(key, { ...event, first_seen: event.first_seen ?? event.event_time, last_seen: event.last_seen ?? event.event_time, duplicate_count: event.duplicate_count ?? 1 }); continue; }
+    const firstTime = new Date(first.last_seen ?? first.event_time ?? 0).getTime();
+    const nextTime = new Date(event.event_time ?? 0).getTime();
+    if (Math.abs(nextTime - firstTime) <= 180000) {
+      first.duplicate_count = Math.max(first.duplicate_count ?? 1, event.duplicate_count ?? 1, (first.duplicate_count ?? 1) + 1);
+      first.last_seen = event.event_time ?? first.last_seen;
+    } else groups.set(`${key}|${event.event_time}`, { ...event, first_seen: event.event_time, last_seen: event.event_time, duplicate_count: event.duplicate_count ?? 1 });
+  }
+  return [...groups.values()];
+}
+
 export default function EventsPage() {
   const isDevelop = process.env.NEXT_PUBLIC_MODE === "develop";
   const [demoEnabled, setDemoEnabled] = useState(() =>
     isDevelop && (typeof window === "undefined" || localStorage.getItem("siem_mode") !== "production")
   );
   const [events, setEvents] = useState<EventRecord[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
   const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  const [severity, setSeverity] = useState("");
+  const [category, setCategory] = useState("");
+  const [host, setHost] = useState("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [selectedEvent, setSelectedEvent] = useState<EventRecord | null>(null);
   const [error, setError] = useState("");
 
   // Simulator state
@@ -21,10 +47,11 @@ export default function EventsPage() {
   const [simStatus, setSimStatus] = useState("");
   const [sending, setSending] = useState(false);
 
-  async function fetchEvents() {
+  async function fetchEvents(nextPage = page) {
     try {
-      const nextEvents = await getEvents();
-      setEvents(nextEvents);
+      const result = await getEvents({ page: nextPage, pageSize, q: debouncedQuery, severity, category, host, from, to });
+      setEvents(result.items);
+      setTotal(result.total);
       setError("");
     } catch {
       setError("Events could not be loaded. Sign in and try again.");
@@ -39,13 +66,9 @@ export default function EventsPage() {
 
   useEffect(() => {
     let active = true;
-    const refresh = () =>
-      getEvents()
-        .then((nextEvents) => {
-          if (active) {
-            setEvents(nextEvents);
-            setError("");
-          }
+    const refresh = () => getEvents({ page, pageSize, q: debouncedQuery, severity, category, host, from, to })
+        .then((result) => {
+          if (active) { setEvents(result.items); setTotal(result.total); setError(""); }
         })
         .catch(() => {
           if (active) setError("Events could not be loaded. Sign in and try again.");
@@ -58,7 +81,12 @@ export default function EventsPage() {
       window.clearTimeout(timer);
       window.clearInterval(interval);
     };
-  }, []);
+  }, [page, pageSize, debouncedQuery, severity, category, host, from, to]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => { setDebouncedQuery(query.trim()); setPage(1); }, 300);
+    return () => window.clearTimeout(timer);
+  }, [query]);
 
   async function handleSendLog(msg: string, sourceType: string, hostname: string) {
     setSending(true);
@@ -66,7 +94,7 @@ export default function EventsPage() {
     try {
       const res = await ingestLog(msg, sourceType, hostname);
       setSimStatus(`✔ Sent log successfully (Stream ID: ${res.stream_id})`);
-      await fetchEvents();
+      await fetchEvents(1);
     } catch {
       setSimStatus("✖ Ingestion failed. Check API status.");
     } finally {
@@ -84,7 +112,7 @@ export default function EventsPage() {
         count++;
       }
       setSimStatus(`✔ Sent batch of ${count} logs successfully! Real-time alerts & dedup triggered.`);
-      await fetchEvents();
+      await fetchEvents(1);
     } catch {
       setSimStatus("✖ Batch ingestion failed.");
     } finally {
@@ -92,9 +120,17 @@ export default function EventsPage() {
     }
   }
 
-  const visibleEvents = events.filter((event) =>
-    JSON.stringify(event).toLowerCase().includes(query.toLowerCase())
-  );
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const clearFilters = () => { setQuery(""); setSeverity(""); setCategory(""); setHost(""); setFrom(""); setTo(""); setPage(1); };
+  const highlight = (value: string) => {
+    if (!debouncedQuery) return value;
+    const parts = value.split(new RegExp(`(${debouncedQuery.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "ig"));
+    return parts.map((part, index) => part.toLowerCase() === debouncedQuery.toLowerCase() ? <mark key={index}>{part}</mark> : part);
+  };
+  const fieldEntries = (event: EventRecord) => Object.entries({
+    event_id: event.event_id, event_time: event.event_time, hostname: event.hostname, category: event.log_category,
+    event_type: event.event_type, severity: event.severity, source_ip: event.src_ip, username: event.username, ...event.extra_fields,
+  }).filter(([, value]) => value !== undefined && value !== "");
 
   return (
     <main className="account-shell">
@@ -241,38 +277,45 @@ export default function EventsPage() {
       </section>
 
       <section className="data-page">
-        <input
-          className="search-input"
-          aria-label="Search events"
-          placeholder="Search message, hostname, source, username, IP..."
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-        />
+        <div className="event-controls">
+          <input className="search-input" aria-label="Search events" placeholder="Search message, hostname, category, IP..." value={query} onChange={(event) => setQuery(event.target.value)} />
+          <div className="filter-grid">
+            <select aria-label="Filter severity" value={severity} onChange={(event) => { setSeverity(event.target.value); setPage(1); }}><option value="">All severity</option><option value="info">Info</option><option value="warning">Warning</option><option value="error">Error</option><option value="critical">Critical</option></select>
+            <input aria-label="Filter category" placeholder="Category" value={category} onChange={(event) => { setCategory(event.target.value); setPage(1); }} />
+            <input aria-label="Filter host" placeholder="Host" value={host} onChange={(event) => { setHost(event.target.value); setPage(1); }} />
+            <input aria-label="Filter from date" type="datetime-local" value={from} onChange={(event) => { setFrom(event.target.value); setPage(1); }} />
+            <input aria-label="Filter to date" type="datetime-local" value={to} onChange={(event) => { setTo(event.target.value); setPage(1); }} />
+            <button type="button" className="filter-clear" onClick={clearFilters}>Clear filters</button>
+          </div>
+          <div className="results-line"><span>{total.toLocaleString()} results</span><label>Rows <select value={pageSize} onChange={(event) => { setPageSize(Number(event.target.value)); setPage(1); }}><option value="25">25</option><option value="50">50</option><option value="100">100</option></select></label></div>
+        </div>
 
         {error && <p className="notice">{error}</p>}
-        {!error && !visibleEvents.length && <p className="empty-state">No events found.</p>}
+        {!error && !events.length && <p className="empty-state">No events found.</p>}
 
-        {visibleEvents.map((event, index) => (
-          <article className="data-row event-row" key={event.event_id ?? index}>
+        {groupEvents(events).map((event, index) => (
+          <button className="data-row event-row event-button" key={event.event_id ?? index} type="button" onClick={() => setSelectedEvent(event)}>
             <div>
               <div className="flex items-center gap-2">
-                <span className="eyebrow">{event.event_type ?? event.source_type ?? "event"}</span>
+                  <span className="event-category">{event.log_category ?? event.source_type ?? "event"}</span>
                 {event.duplicate_count && event.duplicate_count > 1 ? (
-                  <span className="dedup-tag">⚡ {event.duplicate_count}x deduplicated</span>
+                  <span className="dedup-tag">{event.duplicate_count}x deduplicated</span>
                 ) : null}
               </div>
-              <h2>{event.message ?? "Unlabeled event"}</h2>
+              <h2>{highlight(event.message ?? "Unlabeled event")}</h2>
               <small>
                 Host: {event.hostname ?? "Unknown"} · Cat: {event.log_category ?? "generic"}{" "}
                 {event.src_ip ? `· IP: ${event.src_ip}` : ""}{" "}
                 {event.username ? `· User: ${event.username}` : ""}{" "}
-                · {event.event_time ? new Date(event.event_time).toLocaleString() : "Unknown time"}
+                · {event.first_seen && event.last_seen && event.first_seen !== event.last_seen ? `First seen: ${new Date(event.first_seen).toLocaleString()} · Last seen: ${new Date(event.last_seen).toLocaleString()}` : event.event_time ? new Date(event.event_time).toLocaleString() : "Unknown time"}
               </small>
             </div>
-            <code>{event.severity ?? "info"}</code>
-          </article>
+            <code className={`event-severity severity-${event.severity ?? "info"}`}>{event.severity ?? "info"}</code>
+          </button>
         ))}
+        <div className="pagination"><button type="button" disabled={page === 1} onClick={() => setPage(page - 1)}>Prev</button><span>Page <strong>{page}</strong> of {totalPages}</span><button type="button" disabled={page >= totalPages} onClick={() => setPage(page + 1)}>Next</button></div>
       </section>
+      {selectedEvent && <dialog open className="event-dialog" onClick={(event) => { if (event.target === event.currentTarget) setSelectedEvent(null); }}><div className="event-dialog-panel"><div className="dialog-heading"><div><span className="eyebrow">Event detail</span><h2>{selectedEvent.event_type ?? "Normalized event"}</h2></div><button type="button" onClick={() => setSelectedEvent(null)} aria-label="Close details">Close</button></div><div className="event-fields">{fieldEntries(selectedEvent).map(([key, value]) => <div key={key}><dt>{key.replaceAll("_", " ")}</dt><dd>{String(value)}</dd></div>)}</div><h3>Raw log</h3><pre>{selectedEvent.raw ?? selectedEvent.message ?? "No raw payload available"}</pre><button type="button" className="copy-raw" onClick={() => void navigator.clipboard?.writeText(selectedEvent.raw ?? selectedEvent.message ?? "")}>Copy raw log</button></div></dialog>}
     </main>
   );
 }

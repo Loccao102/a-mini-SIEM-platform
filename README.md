@@ -1,12 +1,14 @@
 # A mini SIEM platform
 
-Nen tang SIEM local gom:
+Nền tảng SIEM local gom:
 
 ```text
-Filebeat / Winlogbeat -> HTTP ingest -> Redis Stream -> Parser -> Elasticsearch
-                                                       -> Rule Engine -> PostgreSQL alerts
-                                                               -> Next.js dashboard
+Elastic Agent -> Logstash -> HTTP ingest -> Redis Stream -> Parser -> Elasticsearch
+                                                   -> Rule Engine -> PostgreSQL alerts
+                                                           -> Next.js dashboard
 ```
+
+Elastic Agent thay thế Filebeat/Winlogbeat để quản lý thu thập log từ nhiều service/host theo một policy tập trung, hỗ trợ tốt hơn cho môi trường đa máy chủ, đa dịch vụ và dễ mở rộng ở giai đoạn sau. Đây là mô hình Fleet thật, không phải mock: Fleet Server luôn chạy cùng stack, agent enroll trực tiếp vào `fleet-server` trên cổng `8220`, và backend đồng bộ asset + `log_sources` theo hostname để nhiều client đều có thể gửi log lên cùng một server mà không cần khai báo thủ công từng host.
 
 Dashboard doc du lieu that tu API Go. Overview, Alerts va Log Explorer tu tai lai moi 3 giay.
 
@@ -15,7 +17,7 @@ Dashboard doc du lieu that tu API Go. Overview, Alerts va Log Explorer tu tai la
 - Docker Desktop dang chay
 - Docker Compose v2
 - PowerShell 5.1 hoac PowerShell 7
-- Cac port `3000`, `5432`, `6379`, `8080`, `9200`, `5044` chua bi chiem
+- Cac port `3000`, `5432`, `6379`, `8080`, `9200`, `5044`, `8220` chua bi chiem
 
 ```powershell
 docker --version
@@ -198,65 +200,111 @@ Frontend:
 - `http://localhost:3000/alerts`
 - `http://localhost:3000/rules`
 
-## Cai theo doi may Windows
+## Chuyển sang Elastic Agent + Fleet
 
-Dùng Winlogbeat tren may Windows can theo doi. Backend Docker va service `logstash` phai dang chay. Winlogbeat gui Beats protocol toi port `5044`; Logstash moi gui HTTP toi backend.
+Với Elastic Agent + Fleet, mỗi máy chủ/host chỉ cần cài một agent duy nhất, rồi đăng ký với Fleet Server để nhận policy thu thập log từ nhiều service khác nhau như Linux syslog, Windows Event Log, Docker, NGINX, SSH, v.v. Điều này rõ ràng mạnh hơn Filebeat/Winlogbeat khi ta cần quản lý nhiều serviço/host trong một hệ thống SIEM kiểu enterprise.
 
-1. Cai Winlogbeat tu Elastic.
-2. Chep `config/winlogbeat.yml` vao thu muc Winlogbeat. Khong dung ban cu co `output.http`; Winlogbeat khong ho tro output nay.
-3. Neu Logstash chay tren cung may, giu mac dinh `localhost`. Neu Docker chay tren may khac, sua host trong config:
+Backend cũng được bổ sung một route `POST /api/v1/fleet/agents` để đồng bộ asset: khi một agent enroll, server sẽ upsert vào bảng `assets` và `log_sources`, từ đó nhiều client có thể gửi log lên cùng server mà không cần tạo asset thủ công trước. Về mặt kiến trúc, đây là một SIEM mini nhưng chạy theo đúng nguyên tắc của Elastic Fleet: Fleet Server là thành phần nền của hệ thống, không phải phụ kiện tùy chọn.
+
+1. Tải Elastic Agent theo đúng OS/arch.
+2. Dùng policy mẫu trong `config/elastic-agent.yml`.
+3. Chỉnh sửa host Logstash nếu chạy ngoài cùng máy:
 
 ```yaml
-output.logstash:
-  hosts: ["IP_MAY_CHAY_SIEM:5044"]
+outputs:
+  default:
+    type: logstash
+    hosts: ["IP_MAY_CHAY_SIEM:5044"]
+```
+
+4. Đối với Linux host:
+
+```bash
+sudo elastic-agent install -f -c /etc/elastic-agent/elastic-agent.yml
+sudo systemctl enable --now elastic-agent
+sudo systemctl status elastic-agent
+sudo journalctl -u elastic-agent -f
+```
+
+5. Với Fleet, agent sẽ tự đăng ký qua `fleet-server` ở port `8220`; backend sẽ nhận metadata `hostname`, `os_type`, `agent_id`, và `source_types` rồi upsert vào bảng assets/log_sources. Trong môi trường thực tế, Fleet Server là thành phần luôn chạy và agent liên tục poll policy từ đây.
+
+```powershell
+Invoke-RestMethod http://localhost:8080/api/v1/fleet/agents -Method Post -ContentType 'application/json' -Body (@{
+  agent_id = 'linux-fleet-01'
+  hostname = 'web-02'
+  os_type = 'linux'
+  ip_address = '10.0.0.12'
+  source_types = @('system','docker','elastic_agent')
+  tags = @{ env = 'prod'; team = 'platform' }
+} | ConvertTo-Json -Depth 4)
+```
+
+5. Đối với Windows host:
+
+```powershell
+.\elastic-agent.exe install -f -c .\elastic-agent.yml
+Restart-Service elastic-agent
+Get-Service elastic-agent
+```
+
+6. Với Elastic Agent, ta có thể gắn nhiều input trong cùng một policy: `logfile`, `winlog`, `docker`, `system`, `custom`, v.v. Điều này giúp quản lý log từ nhiều service trong một agent thay vì phải cài Filebeat + Winlogbeat riêng cho từng loại host.
+
+> Lưu ý: luồng dữ liệu vẫn giữ nguyên mô hình hiện tại: Elastic Agent -> Logstash -> backend HTTP ingest -> Redis -> parser -> Elasticsearch. Chỉ thay đổi tầng thu thập, không cần sửa pipeline nghiệp vụ trong SIEM.
+
+## Cai theo doi may Windows
+
+Dùng Elastic Agent tren may Windows can theo doi. Backend Docker va service `logstash` phai dang chay. Agent gui log den port `5044` qua Logstash; Logstash moi gui HTTP toi backend.
+
+1. Cai Elastic Agent tu Elastic.
+2. Sử dụng file mẫu `config/elastic-agent.yml` và bật input `winlog` trong policy.
+3. Nếu Logstash chay tren cung may, giu mac dinh `localhost`. Neu Docker chay tren may khac, sua host trong config:
+
+```yaml
+outputs:
+  default:
+    type: logstash
+    hosts: ["IP_MAY_CHAY_SIEM:5044"]
 ```
 
 4. Kiem tra cau hinh trong PowerShell Administrator:
 
 ```powershell
-.\winlogbeat.exe test config -c .\winlogbeat.yml
+.\elastic-agent.exe inspect -c .\elastic-agent.yml
 ```
 
-5. Neu service da ton tai nhu ban dang co, chi can nap lai config va khoi dong lai:
+5. Ngoai ra, co the tai lai policy va khoi dong lai service:
 
 ```powershell
-Restart-Service winlogbeat
-Get-Service winlogbeat
-```
-
-Neu may bao khong tim thay service, chay PowerShell Administrator tai thu muc Winlogbeat:
-
-```powershell
-.\install-service-winlogbeat.ps1
-Start-Service winlogbeat
+Restart-Service elastic-agent
+Get-Service elastic-agent
 ```
 
 6. Xem log neu chua gui duoc:
 
 ```powershell
-Get-Content 'C:\ProgramData\winlogbeat\Logs\winlogbeat' -Tail 100
+Get-Content 'C:\ProgramData\Elastic\Agent\logs\elastic-agent-*' -Tail 100
 ```
 
-Config doc Windows `Security` va `System`, gui `source_type=windows_eventlog`, `host.name` va `agent.id` toi Logstash. Khoi dong bridge bang `docker compose up -d logstash`.
-
-Winlogbeat phai ket noi duoc toi `IP_MAY_CHAY_SIEM:5044`. Khong gui Winlogbeat truc tiep toi port `8080`, vi port do nhan HTTP tu Logstash.
+Elastic Agent cho phep gom `Security`, `System` va cac log daemon/phu trong cung mot policy, đồng thời dễ lan truyen/quan ly dọc theo nhiều host va service.
 
 ## Cai theo doi may Linux
 
-Dùng Filebeat tren may Linux can theo doi. Chep `config/filebeat.yml` vao Filebeat va sua dia chi Logstash neu Docker chay tren may khac:
+Dùng Elastic Agent tren may Linux can theo doi. Chep `config/elastic-agent.yml` vao Elastic Agent va sua dia chi Logstash neu Docker chay tren may khac.
 
 ```yaml
-output.logstash:
-  hosts: ["IP_MAY_CHAY_SIEM:5044"]
+outputs:
+  default:
+    type: logstash
+    hosts: ["IP_MAY_CHAY_SIEM:5044"]
 ```
 
-Config doc `/var/log/auth.log` va `/var/log/syslog`, sau do gui `source_type=linux_sshd` toi API.
+Agency thu thập `/var/log/auth.log`, `/var/log/syslog`, log Docker, log nginx, v.v. trong một policy duy nhất.
 
 ```bash
-sudo filebeat test config -c /etc/filebeat/filebeat.yml
-sudo systemctl enable --now filebeat
-sudo systemctl status filebeat
-sudo journalctl -u filebeat -f
+sudo elastic-agent inspect -c /etc/elastic-agent/elastic-agent.yml
+sudo systemctl enable --now elastic-agent
+sudo systemctl status elastic-agent
+sudo journalctl -u elastic-agent -f
 ```
 
 Neu Filebeat chay truc tiep tren may, dung IP hoac `localhost` cua may chay Docker. `backend:8080` chi dung cho container noi bo, khong dung trong cau hinh agent chay tren Windows/Linux host.
@@ -329,7 +377,8 @@ Admin chi duoc tao o lan khoi tao database dau tien. Dung password cu cua volume
 
 - Kiem tra `http://IP_MAY_CHAY_SIEM:8080/healthz` tu may agent.
 - Kiem tra firewall cho TCP `8080`.
-- Kiem tra agent dang dung dung file config.
+- Kiem tra Fleet Server da chay o port `8220` va agent da enroll thanh cong.
+- Kiem tra asset da ton tai trong PostgreSQL: `SELECT asset_id, hostname, os_type FROM assets ORDER BY asset_id DESC LIMIT 10;`
 - Kiem tra Redis Stream va Elasticsearch theo phan “Xac minh monitoring cap nhat”.
 
 ## Test va phat trien
@@ -382,10 +431,10 @@ docker compose down -v
 - `backend/cmd/parser`: parser CLI doc lap de debug.
 - `backend/internal`: API, auth, ingest, parser, rule engine va storage.
 - `backend/migrations`: schema PostgreSQL.
-- `config/filebeat.yml`: theo doi log Linux.
-- `config/winlogbeat.yml`: theo doi Windows Event Log.
+- `config/elastic-agent.yml`: policy thu thap log tập trung cho nhiều service/host.
+- `config/logstash-pipeline.conf`: nhận Beats/Elastic Agent input và forward sang backend.
 - `frontend`: Next.js dashboard.
-- `docker-compose.yml`: PostgreSQL, Redis, Elasticsearch, backend va frontend.
+- `docker-compose.yml`: PostgreSQL, Redis, Elasticsearch, Logstash, Elastic Agent, backend va frontend.
 
 ## Gioi han local
 

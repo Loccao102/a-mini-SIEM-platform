@@ -185,7 +185,7 @@ export function AnalyticsCharts({ data }: { data: AnalyticsData | null }) {
         <div className="flex justify-between items-center mb-4">
           <div>
             <span className="eyebrow block">Threat Intelligence & GeoIP</span>
-            <h3 className="text-xl font-medium text-(--ink)">🌐 Top Attacking IPs & GeoIP Origin</h3>
+            <h3 className="text-xl font-medium text-(--ink)">Top Attacking IPs & GeoIP Origin</h3>
           </div>
           <span className="text-xs font-mono text-(--coral)">Active Threats</span>
         </div>

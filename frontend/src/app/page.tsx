@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { Alert, AnalyticsData, ApiError, DashboardSummary, getAlerts, getAnalytics, getSummary } from "@/lib/api";
 import { AnalyticsCharts } from "@/components/analytics-charts";
+import { SeverityBadge } from "@/components/severity-badge";
 
 function formatDate(value: string) {
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
@@ -55,7 +56,7 @@ export default function Home() {
         <p className="eyebrow" suppressHydrationWarning>
           {today}
         </p>
-        <h1>Security Command Center</h1>
+        <div className="dashboard-title-row"><h1>Security Command Center</h1><span className="live-readout"><span className="pulse-dot" /> Auto-refresh 5s</span></div>
         <p className="lede">Theo dõi liên tục các chỉ số an ninh, tín hiệu đe dọa GeoIP và bức tranh tổng quan sự cố SOC.</p>
 
         {error && (
@@ -101,7 +102,7 @@ export default function Home() {
           {!loading && !alerts.length && <p className="empty-state">No alerts have been triggered.</p>}
           {alerts.map((alert) => (
             <div className="alert-row" key={alert.alert_id}>
-              <span className={`severity ${alert.severity}`}>{alert.severity}</span>
+              <SeverityBadge severity={alert.severity} />
               <div>
                 <strong>{alert.summary}</strong>
                 <small>

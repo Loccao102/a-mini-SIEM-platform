@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { Alert, ApiError, getAlerts, updateAlert } from "@/lib/api";
+import { SeverityBadge } from "@/components/severity-badge";
 
 export default function AlertsPage() {
   const [alerts, setAlerts] = useState<Alert[]>([]);
@@ -77,7 +78,7 @@ export default function AlertsPage() {
           <article className="data-row" key={alert.alert_id}>
             <div>
               <div className="flex items-center gap-2">
-                <span className={`severity ${alert.severity}`}>{alert.severity}</span>
+                <SeverityBadge severity={alert.severity} />
                 {alert.occurrences && alert.occurrences > 1 ? (
                   <span className="dedup-tag">⚡ {alert.occurrences}x aggregated</span>
                 ) : null}
