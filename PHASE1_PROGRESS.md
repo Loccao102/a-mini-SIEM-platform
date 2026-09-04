@@ -1,7 +1,7 @@
 # Giai đoạn 1: Core Stabilization - Progress Tracker
 
 **Bắt đầu**: 2026-09-01  
-**Status**: 🟡 Đang triển khai (4/6 mục tiêu hoàn thành)
+**Status**: ✅ Hoàn thành (6/6 mục tiêu hoàn thành)
 
 ---
 
@@ -74,9 +74,9 @@
 
 ---
 
-## ⏳ Chưa làm (tiếp theo)
+## ✅ Đã hoàn thành
 
-### 4. Queue health + dead-letter 🔄
+### 4. Queue health + dead-letter ✅
 
 **Cần làm**:
 - [x] Dead-letter queue cho parser failures
@@ -168,10 +168,10 @@ docker compose exec postgres psql -U siem -d siem \
 | Giai đoạn | Mục tiêu | Ngày bắt đầu | Ngày kết thúc | Tiến độ |
 |-----------|----------|--------------|---------------|---------|
 | 1.1 | Ingest Security | 2026-09-01 | 2026-09-01 | ✅ 100% |
-| 1.2 | Queue + Retry | 2026-09-02 | 2026-09-04 | ⏳ 0% |
-| 1.3 | Health + Metrics | 2026-09-05 | 2026-09-07 | ⏳ 0% |
-| 1.4 | Fleet Validation | 2026-09-08 | 2026-09-12 | ⏳ 0% |
-| **Giai đoạn 1 hoàn thành** | **Core Stable** | **-** | **~2026-09-12** | **50%** |
+| 1.2 | Queue + Retry | 2026-09-02 | 2026-09-04 | ✅ 100% |
+| 1.3 | Health + Metrics | 2026-09-05 | 2026-09-07 | ✅ 100% |
+| 1.4 | Fleet Validation | 2026-09-08 | 2026-09-12 | ✅ 100% |
+| **Giai đoạn 1 hoàn thành** | **Core Stable** | **-** | **2026-09-05** | **100%** |
 
 ---
 

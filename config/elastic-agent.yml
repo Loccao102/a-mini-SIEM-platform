@@ -4,7 +4,7 @@ agent:
     enabled: false
 
 fleet:
-  enabled: true
+  enabled: false
   hosts: ["${FLEET_SERVER_HOST:localhost}:8220"]
   ssl:
     verification_mode: none

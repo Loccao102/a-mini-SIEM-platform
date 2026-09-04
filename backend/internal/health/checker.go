@@ -4,8 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/ingest"
+	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/parser"
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/storage"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
@@ -267,9 +270,13 @@ func (h *HealthChecker) CheckConnectorHealth(ctx context.Context) ServiceHealth 
 	checks := make(map[string]string)
 
 	// Check if ingest consumer group exists
-	groups, err := h.redis.XInfoGroups(ctx, "siem:ingest").Result()
+	groups, err := h.redis.XInfoGroups(ctx, ingest.DefaultStream).Result()
 	if err != nil {
-		checks["ingest_group"] = fmt.Sprintf("error: %v", err)
+		if err == redis.Nil || strings.Contains(err.Error(), "no such key") {
+			checks["ingest_group"] = "not created yet"
+		} else {
+			checks["ingest_group"] = fmt.Sprintf("error: %v", err)
+		}
 	} else if len(groups) == 0 {
 		checks["ingest_group"] = "not found (waiting for connection)"
 	} else {
@@ -277,9 +284,13 @@ func (h *HealthChecker) CheckConnectorHealth(ctx context.Context) ServiceHealth 
 	}
 
 	// Check if parser consumer group exists
-	pGroups, err := h.redis.XInfoGroups(ctx, "siem:parser").Result()
+	pGroups, err := h.redis.XInfoGroups(ctx, ingest.DefaultStream).Result()
 	if err != nil {
-		checks["parser_group"] = fmt.Sprintf("error: %v", err)
+		if err == redis.Nil || strings.Contains(err.Error(), "no such key") {
+			checks["parser_group"] = "not created yet"
+		} else {
+			checks["parser_group"] = fmt.Sprintf("error: %v", err)
+		}
 	} else if len(pGroups) == 0 {
 		checks["parser_group"] = "not found (waiting for connection)"
 	} else {
@@ -290,7 +301,14 @@ func (h *HealthChecker) CheckConnectorHealth(ctx context.Context) ServiceHealth 
 	message := "Connectors are ready"
 
 	// If no consumers connected, status is degraded
-	if len(groups) == 0 || len(pGroups) == 0 {
+	parserConnected := false
+	for _, group := range groups {
+		if group.Name == parser.DefaultConsumerGroup {
+			parserConnected = true
+			break
+		}
+	}
+	if !parserConnected {
 		status = StatusDegraded
 		message = "Waiting for ingest/parser services to connect"
 	}
@@ -325,7 +343,7 @@ func (h *HealthChecker) CheckDatabase(ctx context.Context) ServiceHealth {
 		SELECT name FROM schema_migrations 
 		ORDER BY name DESC LIMIT 1
 	`).Scan(&lastMigration)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && err != sql.ErrNoRows && !strings.Contains(err.Error(), "does not exist") {
 		return ServiceHealth{
 			Status:       StatusDegraded,
 			Message:      fmt.Sprintf("Migration check failed: %v", err),
@@ -334,7 +352,9 @@ func (h *HealthChecker) CheckDatabase(ctx context.Context) ServiceHealth {
 		}
 	}
 
-	if lastMigration == "" {
+	if err != nil && strings.Contains(err.Error(), "does not exist") {
+		checks["migrations"] = "not tracked (schema_migrations table absent)"
+	} else if lastMigration == "" {
 		checks["migrations"] = "no migrations applied"
 	} else {
 		checks["migrations"] = fmt.Sprintf("ok (latest: %s)", lastMigration)
