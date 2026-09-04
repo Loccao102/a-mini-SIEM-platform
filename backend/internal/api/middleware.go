@@ -1,12 +1,50 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 )
+
+var requestSequence uint64
+
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (writer *statusWriter) WriteHeader(status int) {
+	writer.status = status
+	writer.ResponseWriter.WriteHeader(status)
+}
+
+func (writer *statusWriter) Write(body []byte) (int, error) {
+	if writer.status == 0 {
+		writer.status = http.StatusOK
+	}
+	return writer.ResponseWriter.Write(body)
+}
+
+func withTrace(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		traceID := request.Header.Get("X-Request-ID")
+		if traceID == "" {
+			traceID = fmt.Sprintf("req-%d", atomic.AddUint64(&requestSequence, 1))
+		}
+		request.Header.Set("X-Request-ID", traceID)
+		response.Header().Set("X-Request-ID", traceID)
+		started := time.Now()
+		writer := &statusWriter{ResponseWriter: response}
+		next.ServeHTTP(writer, request)
+		entry, _ := json.Marshal(map[string]any{"trace_id": traceID, "method": request.Method, "path": request.URL.Path, "status": writer.status, "duration_ms": time.Since(started).Milliseconds()})
+		log.Printf("%s", entry)
+	})
+}
 
 const (
 	// MaxPayloadSize is 10MB

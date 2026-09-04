@@ -82,6 +82,31 @@ func NewElasticsearch(baseURL string) *Elasticsearch {
 	return &Elasticsearch{baseURL: strings.TrimRight(baseURL, "/"), client: &http.Client{Timeout: 15 * time.Second}}
 }
 
+func (elastic *Elasticsearch) ClusterHealth(ctx context.Context) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, elastic.baseURL+"/_cluster/health", nil)
+	if err != nil {
+		return err
+	}
+	response, err := elastic.client.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode >= 300 {
+		return fmt.Errorf("cluster health: %s", response.Status)
+	}
+	var payload struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		return err
+	}
+	if payload.Status == "red" || payload.Status == "" {
+		return fmt.Errorf("cluster status is %q", payload.Status)
+	}
+	return nil
+}
+
 func (elastic *Elasticsearch) EnsureIndex(ctx context.Context) error {
 	request, err := http.NewRequestWithContext(ctx, http.MethodHead, elastic.baseURL+"/normalized_events", nil)
 	if err != nil {

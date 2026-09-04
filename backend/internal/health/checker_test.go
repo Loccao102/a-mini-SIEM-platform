@@ -18,7 +18,7 @@ func setupTestPostgres(t *testing.T) *pgxpool.Pool {
 		t.Skipf("PostgreSQL not available: %v", err)
 	}
 
-	pool, err := pgxpool.NewWithContext(ctx, config.ConnString())
+	pool, err := pgxpool.New(ctx, config.ConnString())
 	if err != nil {
 		t.Skipf("Cannot connect to PostgreSQL: %v", err)
 	}

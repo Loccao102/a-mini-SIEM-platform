@@ -1,0 +1,24 @@
+# Fleet policy templates. Apply one policy per enrolled agent and keep the version in sync with the enrollment payload.
+policies:
+  linux-baseline:
+    os_type: linux
+    version: 1
+    source_types:
+      - linux_sshd
+      - syslog
+    tags:
+      platform: linux
+  windows-baseline:
+    os_type: windows
+    version: 1
+    source_types:
+      - windows_eventlog
+    tags:
+      platform: windows
+  docker-baseline:
+    os_type: docker
+    version: 1
+    source_types:
+      - docker
+    tags:
+      platform: docker

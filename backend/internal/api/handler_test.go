@@ -54,6 +54,7 @@ func TestResourceRoutesRejectUnsupportedMethods(t *testing.T) {
 
 func TestNormalizeFleetEnrollment(t *testing.T) {
 	payload := fleetEnrollmentRequest{
+		AgentID:     "agent-web-02",
 		Hostname:    "web-02",
 		SourceTypes: []string{"system", "docker"},
 		Tags:        map[string]string{"env": "prod"},
@@ -65,13 +66,13 @@ func TestNormalizeFleetEnrollment(t *testing.T) {
 	if result.OSType != "linux" {
 		t.Fatalf("expected default os_type linux, got %q", result.OSType)
 	}
-	if result.AgentID != "fleet-agent" {
-		t.Fatalf("expected default agent_id fleet-agent, got %q", result.AgentID)
+	if result.AgentID != "agent-web-02" {
+		t.Fatalf("expected agent_id to be preserved, got %q", result.AgentID)
 	}
 	if len(result.SourceTypes) != 2 {
 		t.Fatalf("expected 2 source types, got %d", len(result.SourceTypes))
 	}
-	if result.Tags["fleet.agent_id"] != "fleet-agent" {
+	if result.Tags["fleet.agent_id"] != "agent-web-02" {
 		t.Fatalf("fleet agent tag not normalized: %#v", result.Tags)
 	}
 }

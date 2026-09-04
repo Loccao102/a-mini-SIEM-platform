@@ -72,8 +72,9 @@ func main() {
 	queueMetrics := metrics.New()
 
 	// Create handler with all components
-	handler := api.New(postgres, storage.NewElasticsearch(env("ELASTICSEARCH_URL", "http://localhost:9200")), ingestClient, authManager, dedupManager, apiKeyMgr, rateLimiter, dlqManager, healthChecker, queueMetrics)
 	elastic := storage.NewElasticsearch(env("ELASTICSEARCH_URL", "http://localhost:9200"))
+	healthChecker = health.New(postgres, redisClient, elastic)
+	handler := api.New(postgres, elastic, ingestClient, authManager, dedupManager, apiKeyMgr, rateLimiter, dlqManager, healthChecker, queueMetrics)
 	if err := elastic.EnsureIndex(ctx); err != nil {
 		log.Fatalf("prepare Elasticsearch index: %v", err)
 	}
@@ -88,18 +89,25 @@ func main() {
 	}
 	defer engine.Close()
 	processEvents := func(ctx context.Context, events []parser.NormalizedEvent) error {
+		started := time.Now()
 		bulk := make([]any, len(events))
 		for index := range events {
 			bulk[index] = events[index]
 		}
+		indexStarted := time.Now()
 		if err := elastic.BulkIndexEvents(ctx, bulk); err != nil {
+			queueMetrics.RecordESIndexEvent(time.Since(indexStarted), true)
+			queueMetrics.RecordParserEvent(time.Since(started), true)
 			return err
 		}
+		queueMetrics.RecordESIndexEvent(time.Since(indexStarted), false)
 		for _, event := range events {
 			if err := engine.Process(ctx, event); err != nil {
+				queueMetrics.RecordParserEvent(time.Since(started), true)
 				return err
 			}
 		}
+		queueMetrics.RecordParserEvent(time.Since(started), false)
 		return nil
 	}
 	go func() {
@@ -127,13 +135,7 @@ func main() {
 			log.Printf("parser stopped: %v", err)
 		}
 	}()
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
-	})
-	mux.Handle("/api/", handler.Routes())
-	server := &http.Server{Addr: env("API_ADDR", ":8080"), Handler: mux}
+	server := &http.Server{Addr: env("API_ADDR", ":8080"), Handler: handler.Routes()}
 
 	go func() {
 		log.Printf("SIEM API listening on %s", server.Addr)

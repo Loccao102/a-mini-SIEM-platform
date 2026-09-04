@@ -83,40 +83,41 @@
 - [x] Dead-letter queue cho ingest failures
 - [x] Retry logic với exponential backoff
 - [x] Replay tool để reprocess failed events
-- [ ] Health check trên Redis stream
+- [x] Health check trên Redis stream
 - [x] Metrics: queue lag, pending count
-- [ ] Alert khi queue đầy
+- [x] Alert khi queue đầy (health alert + HTTP 503)
 
 **Priority**: HIGH  
 **Estimate**: 1 ngày còn lại
 
 ---
 
-### 5. Pipeline observability ⏳
+### 5. Pipeline observability ✅
 
 **Cần làm**:
-- [ ] GET /healthz/ingest - health của ingest service
-- [ ] GET /healthz/parser - health của parser
-- [ ] GET /healthz/redis - Redis stream status
-- [ ] GET /healthz/elasticsearch - ES cluster status
-- [ ] Metrics endpoint: ingest latency, parser lag, ES indexing lag
-- [ ] Structured logging với trace ID
-- [ ] Alert rules cho pipeline health
+- [x] Ghi nhận ingest count, error count và publish latency
+- [x] GET /healthz/ingest - health của ingest queue
+- [x] GET /healthz/parser - health của parser connector
+- [x] GET /healthz/redis - Redis status
+- [x] GET /healthz/elasticsearch - ES cluster status
+- [x] Metrics endpoint: ingest latency, parser latency, ES indexing latency
+- [x] Structured logging với trace ID
+- [x] Alert rules cho pipeline health và queue-full persistence
 
 **Priority**: HIGH  
 **Estimate**: 2-3 ngày
 
 ---
 
-### 6. Fleet validation ⏳
+### 6. Fleet validation ✅
 
 **Cần làm**:
-- [ ] Validate agent enrollment qua agent_id
-- [ ] Policy template rõ ràng (Linux, Windows, Docker)
-- [ ] Auto-tag mapping (env, team, criticality)
-- [ ] Host status tracking (last_seen, healthy/unhealthy)
-- [ ] Policy versioning và deploy history
-- [ ] Unhealthy agent detection
+- [x] Validate agent enrollment qua agent_id
+- [x] Policy template rõ ràng (Linux, Windows, Docker)
+- [x] Auto-tag mapping (env, team, criticality)
+- [x] Host status tracking (last_seen, healthy/unhealthy)
+- [x] Policy versioning và deploy history
+- [x] Unhealthy agent detection
 
 **Priority**: MEDIUM  
 **Estimate**: 3-5 ngày
@@ -135,11 +136,11 @@ Hệ thống chỉ được xem là **"đạt level chạy thực tế"** khi th
 
 ### ⏳ Cần đạt
 
-- [ ] Dead-letter và replay tool khi thất bại
-- [ ] Health check riêng cho từng service
-- [ ] Metrics cơ bản (latency, lag, indexing time)
-- [ ] Fleet enrollment validation
-- [ ] Structured logging + trace ID
+- [x] Dead-letter và replay tool khi thất bại
+- [x] Health check riêng cho từng service
+- [x] Metrics cơ bản (parser/ES latency, lag, indexing time)
+- [x] Fleet enrollment validation
+- [x] Structured logging + trace ID
 
 ---
 

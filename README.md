@@ -71,6 +71,17 @@ Start-Process http://localhost:3000
 
 Ket qua health mong doi la `status: ok`.
 
+Health chi tiet va metrics cho monitoring:
+
+```powershell
+Invoke-RestMethod http://localhost:8080/healthz/redis
+Invoke-RestMethod http://localhost:8080/healthz/queue
+Invoke-RestMethod http://localhost:8080/healthz/elasticsearch
+Invoke-RestMethod http://localhost:8080/metrics
+```
+
+Retry queue dat 100 message hoac DLQ dat 10 message se tao pipeline alert va tra HTTP 503 tren queue health. Xem lich su alert bang quyen viewer qua `GET /api/v1/pipeline/alerts`.
+
 Neu backend chua len:
 
 ```powershell
@@ -205,6 +216,8 @@ Frontend:
 Với Elastic Agent + Fleet, mỗi máy chủ/host chỉ cần cài một agent duy nhất, rồi đăng ký với Fleet Server để nhận policy thu thập log từ nhiều service khác nhau như Linux syslog, Windows Event Log, Docker, NGINX, SSH, v.v. Điều này rõ ràng mạnh hơn Filebeat/Winlogbeat khi ta cần quản lý nhiều serviço/host trong một hệ thống SIEM kiểu enterprise.
 
 Backend cũng được bổ sung một route `POST /api/v1/fleet/agents` để đồng bộ asset: khi một agent enroll, server sẽ upsert vào bảng `assets` và `log_sources`, từ đó nhiều client có thể gửi log lên cùng server mà không cần tạo asset thủ công trước. Về mặt kiến trúc, đây là một SIEM mini nhưng chạy theo đúng nguyên tắc của Elastic Fleet: Fleet Server là thành phần nền của hệ thống, không phải phụ kiện tùy chọn.
+
+Enrollment bắt buộc `agent_id`, `hostname`, `os_type` (`linux`, `windows`, hoặc `docker`) và source type hợp lệ. Server tự động gán tag `env`, `team`, `criticality`, lưu `last_seen`, đánh dấu agent stale sau 5 phút, và lưu policy deployment history. Template policy nằm trong `config/fleet-policies.yml`. API vận hành gồm `POST /api/v1/fleet/agents`, `GET /api/v1/fleet/agents`, và `GET /api/v1/fleet/deployments`.
 
 1. Tải Elastic Agent theo đúng OS/arch.
 2. Dùng policy mẫu trong `config/elastic-agent.yml`.

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -53,6 +54,19 @@ func (h *Handler) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	}
 
 	json.NewEncoder(w).Encode(response)
+}
+
+func (h *Handler) handleServiceHealth(check func(context.Context) health.ServiceHealth) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		result := check(r.Context())
+		w.Header().Set("Content-Type", "application/json")
+		if result.Status == health.StatusUnhealthy {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		} else {
+			w.WriteHeader(http.StatusOK)
+		}
+		json.NewEncoder(w).Encode(result)
+	}
 }
 
 // handleMetrics handles GET /metrics requests

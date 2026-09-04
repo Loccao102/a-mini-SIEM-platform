@@ -68,6 +68,9 @@ func (handler *Handler) Routes() http.Handler {
 	mux.Handle("POST /api/v1/ingest", ingestSecured)
 
 	mux.HandleFunc("POST /api/v1/fleet/agents", handler.fleetAgentEnroll)
+	mux.Handle("GET /api/v1/fleet/agents", handler.requireRole("viewer", http.HandlerFunc(handler.fleetAgents)))
+	mux.Handle("GET /api/v1/fleet/deployments", handler.requireRole("viewer", http.HandlerFunc(handler.fleetDeployments)))
+	mux.Handle("GET /api/v1/pipeline/alerts", handler.requireRole("viewer", http.HandlerFunc(handler.pipelineAlerts)))
 	mux.Handle("POST /api/v1/rules/test-regex", handler.requireRole("viewer", http.HandlerFunc(handler.testRegex)))
 	mux.Handle("GET /api/v1/summary", handler.requireRole("viewer", http.HandlerFunc(handler.summary)))
 	mux.Handle("GET /api/v1/pipeline/status", handler.requireRole("viewer", http.HandlerFunc(handler.pipelineStatus)))
@@ -89,6 +92,11 @@ func (handler *Handler) Routes() http.Handler {
 
 	// Health and monitoring endpoints (no auth required)
 	mux.HandleFunc("GET /healthz", handler.handleHealthz)
+	mux.HandleFunc("GET /healthz/redis", handler.handleServiceHealth(handler.healthChecker.CheckRedis))
+	mux.HandleFunc("GET /healthz/queue", handler.handleServiceHealth(handler.healthChecker.CheckQueueHealth))
+	mux.HandleFunc("GET /healthz/ingest", handler.handleServiceHealth(handler.healthChecker.CheckQueueHealth))
+	mux.HandleFunc("GET /healthz/parser", handler.handleServiceHealth(handler.healthChecker.CheckConnectorHealth))
+	mux.HandleFunc("GET /healthz/elasticsearch", handler.handleServiceHealth(handler.healthChecker.CheckElasticsearch))
 	mux.HandleFunc("GET /metrics", handler.handleMetrics)
 
 	// DLQ management endpoints
@@ -96,7 +104,7 @@ func (handler *Handler) Routes() http.Handler {
 	mux.Handle("POST /api/v1/dlq/replay/{messageId}", handler.requireRole("analyst", http.HandlerFunc(handler.handleDLQReplay)))
 	mux.Handle("DELETE /api/v1/dlq/purge", handler.requireRole("admin", http.HandlerFunc(handler.handleDLQPurge)))
 
-	return withCORS(mux)
+	return withTrace(withCORS(mux))
 }
 
 func (handler *Handler) login(response http.ResponseWriter, request *http.Request) {
@@ -169,12 +177,17 @@ type ingestRequest struct {
 }
 
 type fleetEnrollmentRequest struct {
-	AgentID     string            `json:"agent_id"`
-	Hostname    string            `json:"hostname"`
-	IPAddress   *string           `json:"ip_address"`
-	OSType      string            `json:"os_type"`
-	SourceTypes []string          `json:"source_types"`
-	Tags        map[string]string `json:"tags"`
+	AgentID       string            `json:"agent_id"`
+	Hostname      string            `json:"hostname"`
+	IPAddress     *string           `json:"ip_address"`
+	OSType        string            `json:"os_type"`
+	Environment   string            `json:"environment"`
+	Team          string            `json:"team"`
+	Criticality   string            `json:"criticality"`
+	PolicyName    string            `json:"policy_name"`
+	PolicyVersion int               `json:"policy_version"`
+	SourceTypes   []string          `json:"source_types"`
+	Tags          map[string]string `json:"tags"`
 }
 
 func normalizeFleetEnrollment(payload fleetEnrollmentRequest) (fleetEnrollmentRequest, error) {
@@ -187,14 +200,47 @@ func normalizeFleetEnrollment(payload fleetEnrollmentRequest) (fleetEnrollmentRe
 		payload.OSType = "linux"
 	}
 	if payload.AgentID == "" {
-		payload.AgentID = "fleet-agent"
+		return payload, fmt.Errorf("agent_id is required")
+	}
+	if !regexp.MustCompile(`^[A-Za-z0-9._:-]{2,128}$`).MatchString(payload.AgentID) {
+		return payload, fmt.Errorf("agent_id must contain only letters, numbers, dot, underscore, colon, or hyphen")
+	}
+	allowedOS := map[string]bool{"linux": true, "windows": true, "docker": true}
+	if !allowedOS[payload.OSType] {
+		return payload, fmt.Errorf("unsupported os_type %q", payload.OSType)
+	}
+	if payload.Criticality == "" {
+		payload.Criticality = "medium"
+	}
+	if payload.Criticality != "low" && payload.Criticality != "medium" && payload.Criticality != "high" && payload.Criticality != "critical" {
+		return payload, fmt.Errorf("invalid criticality")
+	}
+	if payload.PolicyName == "" {
+		payload.PolicyName = payload.OSType + "-baseline"
+	}
+	if payload.PolicyVersion < 1 {
+		payload.PolicyVersion = 1
 	}
 	if len(payload.SourceTypes) == 0 {
 		payload.SourceTypes = []string{"elastic_agent"}
 	}
+	allowedSources := map[string]bool{"elastic_agent": true, "linux_sshd": true, "windows_eventlog": true, "docker": true, "syslog": true, "system": true}
+	for index, sourceType := range payload.SourceTypes {
+		payload.SourceTypes[index] = strings.TrimSpace(strings.ToLower(sourceType))
+		if !allowedSources[payload.SourceTypes[index]] {
+			return payload, fmt.Errorf("unsupported source_type %q", sourceType)
+		}
+	}
 	if payload.Tags == nil {
 		payload.Tags = map[string]string{}
 	}
+	if payload.Environment != "" {
+		payload.Tags["env"] = strings.TrimSpace(payload.Environment)
+	}
+	if payload.Team != "" {
+		payload.Tags["team"] = strings.TrimSpace(payload.Team)
+	}
+	payload.Tags["criticality"] = payload.Criticality
 	payload.Tags["fleet.agent_id"] = payload.AgentID
 	return payload, nil
 }
@@ -221,12 +267,25 @@ func (handler *Handler) fleetAgentEnroll(response http.ResponseWriter, request *
 			return
 		}
 	}
+	policyID, err := handler.ensureFleetPolicy(request.Context(), payload)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, err)
+		return
+	}
+	if _, err := handler.postgres.Exec(request.Context(), `
+		INSERT INTO fleet_policy_deployments (policy_id, asset_id, agent_id, policy_version, status, details)
+		VALUES ($1, $2, $3, $4, 'deployed', $5::jsonb)
+	`, policyID, assetID, payload.AgentID, payload.PolicyVersion, `{"source":"fleet-enrollment"}`); err != nil {
+		writeError(response, http.StatusInternalServerError, err)
+		return
+	}
 	writeJSON(response, http.StatusAccepted, map[string]any{
 		"status":       "registered",
 		"asset_id":     assetID,
 		"hostname":     payload.Hostname,
 		"agent_id":     payload.AgentID,
 		"source_types": payload.SourceTypes,
+		"policy":       map[string]any{"name": payload.PolicyName, "version": payload.PolicyVersion},
 	})
 }
 
@@ -237,37 +296,143 @@ func (handler *Handler) upsertFleetAsset(ctx context.Context, payload fleetEnrol
 	}
 	var assetID int64
 	if payload.IPAddress != nil {
-		_, err = handler.postgres.Exec(ctx, `
-			INSERT INTO assets (hostname, ip_address, os_type, criticality, owner, tags)
-			VALUES ($1, $2::inet, $3, 'medium', NULL, $4::jsonb)
+		err = handler.postgres.QueryRow(ctx, `
+			INSERT INTO assets (hostname, ip_address, os_type, criticality, owner, tags, agent_status, last_seen, enrolled_at, policy_name, policy_version)
+			VALUES ($1, $2::inet, $3, $4, NULL, $5::jsonb, 'healthy', now(), now(), $6, $7)
 			ON CONFLICT (hostname) DO UPDATE SET
 				ip_address = EXCLUDED.ip_address,
 				os_type = EXCLUDED.os_type,
-				tags = COALESCE(assets.tags, '{}'::jsonb) || EXCLUDED.tags
+				criticality = EXCLUDED.criticality,
+				tags = COALESCE(assets.tags, '{}'::jsonb) || EXCLUDED.tags,
+				agent_status = 'healthy', last_seen = now(), policy_name = EXCLUDED.policy_name, policy_version = EXCLUDED.policy_version
 			RETURNING asset_id
-		`, payload.Hostname, strings.TrimSpace(*payload.IPAddress), payload.OSType, string(tagBytes))
+		`, payload.Hostname, strings.TrimSpace(*payload.IPAddress), payload.OSType, payload.Criticality, string(tagBytes), payload.PolicyName, payload.PolicyVersion).Scan(&assetID)
 		if err != nil {
 			return 0, err
 		}
 	} else {
 		err = handler.postgres.QueryRow(ctx, `
-			INSERT INTO assets (hostname, ip_address, os_type, criticality, owner, tags)
-			VALUES ($1, NULL, $2, 'medium', NULL, $3::jsonb)
+			INSERT INTO assets (hostname, ip_address, os_type, criticality, owner, tags, agent_status, last_seen, enrolled_at, policy_name, policy_version)
+			VALUES ($1, NULL, $2, $3, NULL, $4::jsonb, 'healthy', now(), now(), $5, $6)
 			ON CONFLICT (hostname) DO UPDATE SET
 				os_type = EXCLUDED.os_type,
-				tags = COALESCE(assets.tags, '{}'::jsonb) || EXCLUDED.tags
+				criticality = EXCLUDED.criticality,
+				tags = COALESCE(assets.tags, '{}'::jsonb) || EXCLUDED.tags,
+				agent_status = 'healthy', last_seen = now(), policy_name = EXCLUDED.policy_name, policy_version = EXCLUDED.policy_version
 			RETURNING asset_id
-		`, payload.Hostname, payload.OSType, string(tagBytes)).Scan(&assetID)
+		`, payload.Hostname, payload.OSType, payload.Criticality, string(tagBytes), payload.PolicyName, payload.PolicyVersion).Scan(&assetID)
 		if err != nil {
 			return 0, err
 		}
 	}
-	if payload.IPAddress == nil {
-		if err := handler.postgres.QueryRow(ctx, `SELECT asset_id FROM assets WHERE LOWER(hostname) = LOWER($1)`, payload.Hostname).Scan(&assetID); err != nil {
-			return 0, err
-		}
-	}
 	return assetID, nil
+}
+
+func (handler *Handler) ensureFleetPolicy(ctx context.Context, payload fleetEnrollmentRequest) (int64, error) {
+	config := map[string]any{"os_type": payload.OSType, "source_types": payload.SourceTypes, "tags": payload.Tags}
+	configBytes, err := json.Marshal(config)
+	if err != nil {
+		return 0, err
+	}
+	var policyID int64
+	err = handler.postgres.QueryRow(ctx, `
+		INSERT INTO fleet_policies (name, os_type, version, config)
+		VALUES ($1, $2, $3, $4::jsonb)
+		ON CONFLICT (name) DO UPDATE SET os_type=EXCLUDED.os_type, version=EXCLUDED.version, config=EXCLUDED.config, updated_at=now()
+		RETURNING policy_id
+	`, payload.PolicyName, payload.OSType, payload.PolicyVersion, string(configBytes)).Scan(&policyID)
+	return policyID, err
+}
+
+func (handler *Handler) fleetAgents(response http.ResponseWriter, request *http.Request) {
+	_, _ = handler.postgres.Exec(request.Context(), `
+		UPDATE assets SET agent_status='unhealthy'
+		WHERE enrolled_at IS NOT NULL AND COALESCE(last_seen, enrolled_at) < now() - interval '5 minutes' AND agent_status <> 'inactive'
+	`)
+	rows, err := handler.postgres.Query(request.Context(), `
+		SELECT a.asset_id, a.hostname, a.ip_address::text, a.os_type, a.criticality, a.agent_status,
+		       a.last_seen, a.enrolled_at, a.policy_name, a.policy_version,
+		       COALESCE(jsonb_object_agg(ls.source_type, ls.status) FILTER (WHERE ls.source_id IS NOT NULL), '{}'::jsonb)
+		FROM assets a LEFT JOIN log_sources ls ON ls.asset_id=a.asset_id
+		GROUP BY a.asset_id ORDER BY a.hostname
+	`)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, err)
+		return
+	}
+	defer rows.Close()
+	result := make([]map[string]any, 0)
+	for rows.Next() {
+		var assetID, policyVersion int64
+		var hostname, osType, criticality, status string
+		var ipAddress, policyName *string
+		var lastSeen, enrolledAt any
+		var sourceStatuses []byte
+		if err := rows.Scan(&assetID, &hostname, &ipAddress, &osType, &criticality, &status, &lastSeen, &enrolledAt, &policyName, &policyVersion, &sourceStatuses); err != nil {
+			writeError(response, http.StatusInternalServerError, err)
+			return
+		}
+		result = append(result, map[string]any{"asset_id": assetID, "hostname": hostname, "ip_address": ipAddress, "os_type": osType, "criticality": criticality, "agent_status": status, "last_seen": lastSeen, "enrolled_at": enrolledAt, "policy_name": policyName, "policy_version": policyVersion, "source_status": json.RawMessage(sourceStatuses)})
+	}
+	if err := rows.Err(); err != nil {
+		writeError(response, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (handler *Handler) fleetDeployments(response http.ResponseWriter, request *http.Request) {
+	rows, err := handler.postgres.Query(request.Context(), `
+		SELECT d.deployment_id, d.agent_id, a.hostname, p.name, d.policy_version, d.status, d.deployed_at, d.details
+		FROM fleet_policy_deployments d JOIN assets a ON a.asset_id=d.asset_id JOIN fleet_policies p ON p.policy_id=d.policy_id
+		ORDER BY d.deployed_at DESC LIMIT 200
+	`)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, err)
+		return
+	}
+	defer rows.Close()
+	result := make([]map[string]any, 0)
+	for rows.Next() {
+		var deploymentID, policyVersion int64
+		var agentID, hostname, policyName, status string
+		var deployedAt any
+		var details []byte
+		if err := rows.Scan(&deploymentID, &agentID, &hostname, &policyName, &policyVersion, &status, &deployedAt, &details); err != nil {
+			writeError(response, http.StatusInternalServerError, err)
+			return
+		}
+		result = append(result, map[string]any{"deployment_id": deploymentID, "agent_id": agentID, "hostname": hostname, "policy_name": policyName, "policy_version": policyVersion, "status": status, "deployed_at": deployedAt, "details": json.RawMessage(details)})
+	}
+	if err := rows.Err(); err != nil {
+		writeError(response, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (handler *Handler) pipelineAlerts(response http.ResponseWriter, request *http.Request) {
+	rows, err := handler.postgres.Query(request.Context(), `
+		SELECT pipeline_alert_id, alert_key, severity, status, queue_name, observed_value, threshold, message, first_seen, last_seen, resolved_at
+		FROM pipeline_alerts ORDER BY last_seen DESC LIMIT 100
+	`)
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, err)
+		return
+	}
+	defer rows.Close()
+	result := make([]map[string]any, 0)
+	for rows.Next() {
+		var id, observed, threshold int64
+		var key, severity, status, queueName, message string
+		var firstSeen, lastSeen, resolvedAt any
+		if err := rows.Scan(&id, &key, &severity, &status, &queueName, &observed, &threshold, &message, &firstSeen, &lastSeen, &resolvedAt); err != nil {
+			writeError(response, http.StatusInternalServerError, err)
+			return
+		}
+		result = append(result, map[string]any{"pipeline_alert_id": id, "alert_key": key, "severity": severity, "status": status, "queue_name": queueName, "observed_value": observed, "threshold": threshold, "message": message, "first_seen": firstSeen, "last_seen": lastSeen, "resolved_at": resolvedAt})
+	}
+	writeJSON(response, http.StatusOK, result)
 }
 
 func (handler *Handler) registerLogSourceWithAssetID(ctx context.Context, assetID int64, sourceType, agentID string) error {
@@ -285,7 +450,8 @@ func (handler *Handler) registerLogSourceWithAssetID(ctx context.Context, assetI
 	if result.RowsAffected() == 0 {
 		return nil
 	}
-	return nil
+	_, err = handler.postgres.Exec(ctx, `UPDATE assets SET agent_status='healthy', last_seen=now() WHERE asset_id=$1`, assetID)
+	return err
 }
 
 func (handler *Handler) ingestLog(response http.ResponseWriter, request *http.Request) {
@@ -320,7 +486,11 @@ func (handler *Handler) ingestLog(response http.ResponseWriter, request *http.Re
 		writeError(response, http.StatusInternalServerError, err)
 		return
 	}
+	publishStarted := time.Now()
 	id, err := handler.ingest.Publish(request.Context(), ingest.Message{Raw: payload.Message, SourceType: payload.SourceType, Hostname: payload.Hostname, AgentID: payload.AgentID, ReceivedAt: time.Now()})
+	if handler.metrics != nil {
+		handler.metrics.RecordIngestEvent(time.Since(publishStarted), err != nil)
+	}
 	if err != nil {
 		if handler.dlqManager != nil {
 			retryPayload, marshalErr := json.Marshal(map[string]any{
