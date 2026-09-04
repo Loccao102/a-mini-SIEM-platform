@@ -1,7 +1,7 @@
 # Giai đoạn 1: Core Stabilization - Progress Tracker
 
 **Bắt đầu**: 2026-09-01  
-**Status**: 🟡 Đang triển khai (3/5 mục tiêu hoàn thành)
+**Status**: 🟡 Đang triển khai (4/6 mục tiêu hoàn thành)
 
 ---
 
@@ -76,19 +76,19 @@
 
 ## ⏳ Chưa làm (tiếp theo)
 
-### 4. Queue health + dead-letter ⏳
+### 4. Queue health + dead-letter 🔄
 
 **Cần làm**:
-- [ ] Dead-letter queue cho parser failures
-- [ ] Dead-letter queue cho ingest failures
-- [ ] Retry logic với exponential backoff
-- [ ] Replay tool để reprocess failed events
+- [x] Dead-letter queue cho parser failures
+- [x] Dead-letter queue cho ingest failures
+- [x] Retry logic với exponential backoff
+- [x] Replay tool để reprocess failed events
 - [ ] Health check trên Redis stream
-- [ ] Metrics: queue lag, pending count
+- [x] Metrics: queue lag, pending count
 - [ ] Alert khi queue đầy
 
 **Priority**: HIGH  
-**Estimate**: 2-3 ngày
+**Estimate**: 1 ngày còn lại
 
 ---
 
@@ -193,4 +193,3 @@ docker compose exec postgres psql -U siem -d siem \
 - Phase 2: Operational hardening (ILM, backup, retry, alert dedup)
 - Phase 3: Detection enhancement (Threat Intel, Correlation)
 - Phase 4: SOAR + Workflow nâng cao
-

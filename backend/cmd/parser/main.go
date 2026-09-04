@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -10,6 +11,7 @@ import (
 	"syscall"
 
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/dedup"
+	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/dlq"
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/ingest"
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/parser"
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/storage"
@@ -22,13 +24,17 @@ func main() {
 		log.Fatalf("create parser consumer: %v", err)
 	}
 	defer consumer.Close()
-	elastic := storage.NewElasticsearch(env("ELASTICSEARCH_URL", "http://localhost:9200"))
-	// Create Redis client for dedup manager
 	redisOpts, err := redis.ParseURL(env("REDIS_URL", "redis://localhost:6379/0"))
 	if err != nil {
 		log.Fatalf("parse redis url: %v", err)
 	}
 	redisClient := redis.NewClient(redisOpts)
+	defer redisClient.Close()
+	dlqManager := dlq.New(redisClient)
+	if err := dlqManager.EnsureStreams(context.Background()); err != nil {
+		log.Fatalf("ensure dlq streams: %v", err)
+	}
+	elastic := storage.NewElasticsearch(env("ELASTICSEARCH_URL", "http://localhost:9200"))
 	dedupManager := dedup.NewManager(redisClient)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -36,7 +42,7 @@ func main() {
 		log.Fatalf("prepare Elasticsearch index: %v", err)
 	}
 	log.Printf("parser consuming Redis Stream %s", env("REDIS_STREAM", ingest.DefaultStream))
-	if err := consumer.ConsumeBatch(ctx, envInt("PARSER_BATCH_SIZE", 100), envInt("PARSER_WORKERS", 4), func(ctx context.Context, events []parser.NormalizedEvent) error {
+	processEvents := func(ctx context.Context, events []parser.NormalizedEvent) error {
 		bulk := make([]any, len(events))
 		for index, event := range events {
 			// Track event vào dedup Redis
@@ -55,9 +61,40 @@ func main() {
 			bulk[index] = event
 		}
 		return elastic.BulkIndexEvents(ctx, bulk)
+	}
+	go func() {
+		err := dlqManager.ConsumeRetry(ctx, env("PARSER_RETRY_CONSUMER", hostname()+"-retry"), int64(envInt("PARSER_BATCH_SIZE", 100)), func(ctx context.Context, message *dlq.DeadLetterMessage) error {
+			var values map[string]any
+			if err := json.Unmarshal(message.Payload, &values); err != nil {
+				return fmt.Errorf("decode retry payload: %w", err)
+			}
+			return processEvents(ctx, []parser.NormalizedEvent{parser.Parse(redis.XMessage{ID: message.OriginalID, Values: values})})
+		})
+		if err != nil && ctx.Err() == nil {
+			log.Printf("retry consumer stopped: %v", err)
+		}
+	}()
+	if err := consumer.ConsumeBatchWithFailureHandler(ctx, envInt("PARSER_BATCH_SIZE", 100), envInt("PARSER_WORKERS", 4), processEvents, func(ctx context.Context, message redis.XMessage, processingErr error) error {
+		payload, err := json.Marshal(message.Values)
+		if err != nil {
+			return fmt.Errorf("encode failed event %s: %w", message.ID, err)
+		}
+		source := value(message.Values, "source_type")
+		if source == "" {
+			source = "parser"
+		}
+		_, err = dlqManager.SendToRetry(ctx, message.ID, string(payload), 0, source, map[string]string{"error": processingErr.Error()})
+		return err
 	}); err != nil && ctx.Err() == nil {
 		log.Fatal(err)
 	}
+}
+
+func value(values map[string]any, key string) string {
+	if raw, ok := values[key]; ok {
+		return fmt.Sprint(raw)
+	}
+	return ""
 }
 
 func hostname() string {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"strconv"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -12,32 +13,32 @@ import (
 
 const (
 	// Stream names
-	DefaultDLQStream = "siem:dead-letter-queue"
+	DefaultDLQStream   = "siem:dead-letter-queue"
 	DefaultRetryStream = "siem:retry-queue"
-	
+
 	// DLQ consumer group
-	DefaultDLQConsumerGroup = "dlq-processor"
+	DefaultDLQConsumerGroup   = "dlq-processor"
 	DefaultRetryConsumerGroup = "retry-processor"
-	
+
 	// Max retries before moving to permanent DLQ
 	MaxRetries = 3
-	
+
 	// Backoff multiplier for exponential retry
 	BackoffMultiplier = 2.0
-	InitialBackoff = 5 * time.Second
+	InitialBackoff    = 5 * time.Second
 )
 
 // DeadLetterMessage represents a failed event in DLQ
 type DeadLetterMessage struct {
-	ID           string            `json:"id"`           // Message ID from stream
-	OriginalID   string            `json:"original_id"`  // ID from original stream
-	Payload      json.RawMessage   `json:"payload"`      // Original event data
-	Error        string            `json:"error"`        // Error message
+	ID           string            `json:"id"`            // Message ID from stream
+	OriginalID   string            `json:"original_id"`   // ID from original stream
+	Payload      json.RawMessage   `json:"payload"`       // Original event data
+	Error        string            `json:"error"`         // Error message
 	FailureCount int               `json:"failure_count"` // Number of retries attempted
-	FailedAt     time.Time         `json:"failed_at"`    // When it first failed
-	LastAttempt  time.Time         `json:"last_attempt"` // Last retry attempt
-	Source       string            `json:"source"`       // Which stream (ingest, parser, etc.)
-	Metadata     map[string]string `json:"metadata"`     // Additional context
+	FailedAt     time.Time         `json:"failed_at"`     // When it first failed
+	LastAttempt  time.Time         `json:"last_attempt"`  // Last retry attempt
+	Source       string            `json:"source"`        // Which stream (ingest, parser, etc.)
+	Metadata     map[string]string `json:"metadata"`      // Additional context
 }
 
 // Manager handles dead-letter queue operations
@@ -51,7 +52,7 @@ type Manager struct {
 
 // New creates a new DLQ manager
 func New(redisClient *redis.Client) *Manager {
-	return NewWithStreams(redisClient, DefaultDLQStream, DefaultRetryStream, 
+	return NewWithStreams(redisClient, DefaultDLQStream, DefaultRetryStream,
 		DefaultDLQConsumerGroup, DefaultRetryConsumerGroup)
 }
 
@@ -86,14 +87,14 @@ func (m *Manager) EnsureStreams(ctx context.Context) error {
 // SendToDLQ sends a failed message to the dead-letter queue
 func (m *Manager) SendToDLQ(ctx context.Context, originalID, payload string, err error, source string, metadata map[string]string) (string, error) {
 	dlqMsg := DeadLetterMessage{
-		OriginalID:  originalID,
-		Payload:     json.RawMessage(payload),
-		Error:       err.Error(),
+		OriginalID:   originalID,
+		Payload:      json.RawMessage(payload),
+		Error:        err.Error(),
 		FailureCount: 0,
-		FailedAt:    time.Now(),
-		LastAttempt: time.Now(),
-		Source:      source,
-		Metadata:    metadata,
+		FailedAt:     time.Now(),
+		LastAttempt:  time.Now(),
+		Source:       source,
+		Metadata:     metadata,
 	}
 
 	msgBytes, err := json.Marshal(dlqMsg)
@@ -121,13 +122,13 @@ func (m *Manager) SendToRetry(ctx context.Context, originalID, payload string, f
 	nextRetryTime := time.Now().Add(backoffDuration)
 
 	dlqMsg := DeadLetterMessage{
-		OriginalID:  originalID,
-		Payload:     json.RawMessage(payload),
+		OriginalID:   originalID,
+		Payload:      json.RawMessage(payload),
 		FailureCount: failureCount,
-		FailedAt:    time.Now(),
-		LastAttempt: time.Now(),
-		Source:      source,
-		Metadata:    metadata,
+		FailedAt:     time.Now(),
+		LastAttempt:  time.Now(),
+		Source:       source,
+		Metadata:     metadata,
 	}
 
 	msgBytes, err := json.Marshal(dlqMsg)
@@ -138,9 +139,9 @@ func (m *Manager) SendToRetry(ctx context.Context, originalID, payload string, f
 	msgID, err := m.redis.XAdd(ctx, &redis.XAddArgs{
 		Stream: m.retryStream,
 		Values: map[string]interface{}{
-			"data":          string(msgBytes),
-			"retry_at":      nextRetryTime.Unix(),
-			"backoff_ms":    backoffDuration.Milliseconds(),
+			"data":       string(msgBytes),
+			"retry_at":   nextRetryTime.Unix(),
+			"backoff_ms": backoffDuration.Milliseconds(),
 		},
 	}).Result()
 	if err != nil {
@@ -166,7 +167,7 @@ func (m *Manager) GetDLQStats(ctx context.Context) (map[string]interface{}, erro
 
 	// Count consumers and their pending messages
 	consumersCount := len(pending.Consumers)
-	
+
 	return map[string]interface{}{
 		"total_messages":    length,
 		"pending_messages":  pending.Count,
@@ -199,9 +200,9 @@ func (m *Manager) GetRetryStats(ctx context.Context) (map[string]interface{}, er
 
 // ConsumeDLQ reads messages from DLQ for processing
 // callback is called for each message; if it returns nil, message is acknowledged
-func (m *Manager) ConsumeDLQ(ctx context.Context, consumerID string, batchSize int64, 
+func (m *Manager) ConsumeDLQ(ctx context.Context, consumerID string, batchSize int64,
 	callback func(context.Context, *DeadLetterMessage) error) error {
-	
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -229,13 +230,18 @@ func (m *Manager) ConsumeDLQ(ctx context.Context, consumerID string, batchSize i
 		for _, msg := range messages[0].Messages {
 			dataStr, ok := msg.Values["data"].(string)
 			if !ok {
+				if err := m.redis.XAck(ctx, m.dlqStream, m.dlqConsumerGroup, msg.ID).Err(); err != nil {
+					return fmt.Errorf("ack invalid dlq message %s: %w", msg.ID, err)
+				}
 				continue
 			}
 
 			var dlqMsg DeadLetterMessage
 			if err := json.Unmarshal([]byte(dataStr), &dlqMsg); err != nil {
 				// Acknowledge failed parse and continue
-				m.redis.XAck(ctx, m.dlqStream, m.dlqConsumerGroup, msg.ID)
+				if err := m.redis.XAck(ctx, m.dlqStream, m.dlqConsumerGroup, msg.ID).Err(); err != nil {
+					return fmt.Errorf("ack invalid dlq message %s: %w", msg.ID, err)
+				}
 				continue
 			}
 
@@ -256,7 +262,7 @@ func (m *Manager) ConsumeDLQ(ctx context.Context, consumerID string, batchSize i
 // ConsumeRetry reads messages from retry queue and reprocesses them
 func (m *Manager) ConsumeRetry(ctx context.Context, consumerID string, batchSize int64,
 	callback func(context.Context, *DeadLetterMessage) error) error {
-	
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -283,36 +289,66 @@ func (m *Manager) ConsumeRetry(ctx context.Context, consumerID string, batchSize
 		for _, msg := range messages[0].Messages {
 			dataStr, ok := msg.Values["data"].(string)
 			if !ok {
+				if err := m.redis.XAck(ctx, m.retryStream, m.retryConsumerGroup, msg.ID).Err(); err != nil {
+					return fmt.Errorf("ack invalid retry message %s: %w", msg.ID, err)
+				}
 				continue
 			}
 
 			var dlqMsg DeadLetterMessage
 			if err := json.Unmarshal([]byte(dataStr), &dlqMsg); err != nil {
-				m.redis.XAck(ctx, m.retryStream, m.retryConsumerGroup, msg.ID)
+				if err := m.redis.XAck(ctx, m.retryStream, m.retryConsumerGroup, msg.ID).Err(); err != nil {
+					return fmt.Errorf("ack invalid retry message %s: %w", msg.ID, err)
+				}
 				continue
 			}
 
 			dlqMsg.ID = msg.ID
+			if retryAt, ok := msg.Values["retry_at"].(string); ok {
+				retryUnix, err := strconv.ParseInt(retryAt, 10, 64)
+				if err != nil {
+					return fmt.Errorf("parse retry time for %s: %w", msg.ID, err)
+				}
+				if wait := time.Until(time.Unix(retryUnix, 0)); wait > 0 {
+					timer := time.NewTimer(wait)
+					select {
+					case <-ctx.Done():
+						timer.Stop()
+						return ctx.Err()
+					case <-timer.C:
+					}
+				}
+			}
 
 			// Try processing again
 			if err := callback(ctx, &dlqMsg); err != nil {
 				// Still failing, check if we should retry or move to permanent DLQ
 				if dlqMsg.FailureCount >= MaxRetries {
 					// Move to permanent DLQ
-					m.SendToDLQ(ctx, dlqMsg.OriginalID, string(dlqMsg.Payload), 
-						fmt.Errorf("max retries exceeded: %w", err), dlqMsg.Source, dlqMsg.Metadata)
-					m.redis.XAck(ctx, m.retryStream, m.retryConsumerGroup, msg.ID)
+					if _, sendErr := m.SendToDLQ(ctx, dlqMsg.OriginalID, string(dlqMsg.Payload),
+						fmt.Errorf("max retries exceeded: %w", err), dlqMsg.Source, dlqMsg.Metadata); sendErr != nil {
+						return fmt.Errorf("move retry message %s to dlq: %w", msg.ID, sendErr)
+					}
+					if ackErr := m.redis.XAck(ctx, m.retryStream, m.retryConsumerGroup, msg.ID).Err(); ackErr != nil {
+						return fmt.Errorf("ack retry message %s: %w", msg.ID, ackErr)
+					}
 				} else {
 					// Schedule another retry
-					m.SendToRetry(ctx, dlqMsg.OriginalID, string(dlqMsg.Payload),
-						dlqMsg.FailureCount+1, dlqMsg.Source, dlqMsg.Metadata)
-					m.redis.XAck(ctx, m.retryStream, m.retryConsumerGroup, msg.ID)
+					if _, sendErr := m.SendToRetry(ctx, dlqMsg.OriginalID, string(dlqMsg.Payload),
+						dlqMsg.FailureCount+1, dlqMsg.Source, dlqMsg.Metadata); sendErr != nil {
+						return fmt.Errorf("reschedule retry message %s: %w", msg.ID, sendErr)
+					}
+					if ackErr := m.redis.XAck(ctx, m.retryStream, m.retryConsumerGroup, msg.ID).Err(); ackErr != nil {
+						return fmt.Errorf("ack retry message %s: %w", msg.ID, ackErr)
+					}
 				}
 				continue
 			}
 
 			// Success
-			m.redis.XAck(ctx, m.retryStream, m.retryConsumerGroup, msg.ID)
+			if err := m.redis.XAck(ctx, m.retryStream, m.retryConsumerGroup, msg.ID).Err(); err != nil {
+				return fmt.Errorf("ack retry message %s: %w", msg.ID, err)
+			}
 		}
 	}
 }
@@ -337,7 +373,7 @@ func (m *Manager) ReplayMessage(ctx context.Context, dlqMessageID string) error 
 	}
 
 	// Send to retry queue with reset failure count
-	_, err = m.SendToRetry(ctx, dlqMsg.OriginalID, string(dlqMsg.Payload), 
+	_, err = m.SendToRetry(ctx, dlqMsg.OriginalID, string(dlqMsg.Payload),
 		0, dlqMsg.Source, dlqMsg.Metadata)
 	if err != nil {
 		return fmt.Errorf("send to retry: %w", err)

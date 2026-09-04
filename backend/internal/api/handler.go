@@ -25,16 +25,16 @@ import (
 )
 
 type Handler struct {
-	postgres        *pgxpool.Pool
-	elastic         *storage.Elasticsearch
-	ingest          *ingest.Client
-	auth            *auth.Manager
-	dedup           *dedup.Manager
-	apiKeyManager   *apikey.Manager
-	rateLimiter     *ratelimit.Limiter
-	dlqManager      *dlq.Manager
-	healthChecker   *health.HealthChecker
-	metrics         *metrics.QueueMetrics
+	postgres      *pgxpool.Pool
+	elastic       *storage.Elasticsearch
+	ingest        *ingest.Client
+	auth          *auth.Manager
+	dedup         *dedup.Manager
+	apiKeyManager *apikey.Manager
+	rateLimiter   *ratelimit.Limiter
+	dlqManager    *dlq.Manager
+	healthChecker *health.HealthChecker
+	metrics       *metrics.QueueMetrics
 }
 
 func New(postgres *pgxpool.Pool, elastic *storage.Elasticsearch, ingestClient *ingest.Client, authManager *auth.Manager, dedupManager *dedup.Manager, apiKeyMgr *apikey.Manager, limiter *ratelimit.Limiter, dlqMgr *dlq.Manager, hc *health.HealthChecker, met *metrics.QueueMetrics) *Handler {
@@ -56,7 +56,7 @@ func (handler *Handler) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/v1/auth/login", handler.login)
 	mux.Handle("GET /api/v1/auth/me", handler.requireRole("viewer", http.HandlerFunc(handler.getMe)))
-	
+
 	// Ingest endpoint with security middleware: auth + rate limit + size limit
 	ingestSecured := handler.withRequestSizeLimit(MaxPayloadSize)(
 		handler.withRateLimit(
@@ -66,7 +66,7 @@ func (handler *Handler) Routes() http.Handler {
 		),
 	)
 	mux.Handle("POST /api/v1/ingest", ingestSecured)
-	
+
 	mux.HandleFunc("POST /api/v1/fleet/agents", handler.fleetAgentEnroll)
 	mux.Handle("POST /api/v1/rules/test-regex", handler.requireRole("viewer", http.HandlerFunc(handler.testRegex)))
 	mux.Handle("GET /api/v1/summary", handler.requireRole("viewer", http.HandlerFunc(handler.summary)))
@@ -86,16 +86,16 @@ func (handler *Handler) Routes() http.Handler {
 	mux.Handle("/api/v1/cases/{id}/alerts/{alert_id}", handler.requireRole("analyst", http.HandlerFunc(handler.caseAlertRoute)))
 	mux.Handle("/api/v1/users", handler.requireRole("admin", http.HandlerFunc(handler.usersRoute)))
 	mux.Handle("/api/v1/users/{id}", handler.requireRole("admin", http.HandlerFunc(handler.usersRoute)))
-	
+
 	// Health and monitoring endpoints (no auth required)
 	mux.HandleFunc("GET /healthz", handler.handleHealthz)
 	mux.HandleFunc("GET /metrics", handler.handleMetrics)
-	
+
 	// DLQ management endpoints
 	mux.Handle("GET /api/v1/dlq/stats", handler.requireRole("analyst", http.HandlerFunc(handler.handleDLQStats)))
 	mux.Handle("POST /api/v1/dlq/replay/{messageId}", handler.requireRole("analyst", http.HandlerFunc(handler.handleDLQReplay)))
 	mux.Handle("DELETE /api/v1/dlq/purge", handler.requireRole("admin", http.HandlerFunc(handler.handleDLQPurge)))
-	
+
 	return withCORS(mux)
 }
 
@@ -322,6 +322,23 @@ func (handler *Handler) ingestLog(response http.ResponseWriter, request *http.Re
 	}
 	id, err := handler.ingest.Publish(request.Context(), ingest.Message{Raw: payload.Message, SourceType: payload.SourceType, Hostname: payload.Hostname, AgentID: payload.AgentID, ReceivedAt: time.Now()})
 	if err != nil {
+		if handler.dlqManager != nil {
+			retryPayload, marshalErr := json.Marshal(map[string]any{
+				"raw":         payload.Message,
+				"source_type": payload.SourceType,
+				"hostname":    payload.Hostname,
+				"agent_id":    payload.AgentID,
+				"received_at": time.Now().UTC().Format(time.RFC3339Nano),
+			})
+			if marshalErr != nil {
+				writeError(response, http.StatusBadGateway, fmt.Errorf("publish log: %w; encode retry payload: %v", err, marshalErr))
+				return
+			}
+			if _, retryErr := handler.dlqManager.SendToRetry(request.Context(), fmt.Sprintf("ingest-%d", time.Now().UnixNano()), string(retryPayload), 0, "ingest", map[string]string{"error": err.Error()}); retryErr != nil {
+				writeError(response, http.StatusBadGateway, fmt.Errorf("publish log: %w; enqueue retry: %v", err, retryErr))
+				return
+			}
+		}
 		writeError(response, http.StatusBadGateway, err)
 		return
 	}
@@ -412,9 +429,13 @@ func valueOrEmpty(value *string) string {
 func (handler *Handler) events(response http.ResponseWriter, request *http.Request) {
 	values := request.URL.Query()
 	page, _ := strconv.Atoi(values.Get("page"))
-	if page < 1 { page = 1 }
+	if page < 1 {
+		page = 1
+	}
 	pageSize, _ := strconv.Atoi(values.Get("page_size"))
-	if pageSize != 25 && pageSize != 50 && pageSize != 100 { pageSize = 25 }
+	if pageSize != 25 && pageSize != 50 && pageSize != 100 {
+		pageSize = 25
+	}
 	must := make([]any, 0, 5)
 	if query := strings.TrimSpace(values.Get("q")); query != "" {
 		// Build bool query with should clauses for both exact match and prefix/wildcard match
@@ -425,17 +446,23 @@ func (handler *Handler) events(response http.ResponseWriter, request *http.Reque
 		lowerQuery := strings.ToLower(query)
 		should = append(should, map[string]any{"wildcard": map[string]any{"message": map[string]any{"value": "*" + lowerQuery + "*", "case_insensitive": true}}})
 		should = append(should, map[string]any{"wildcard": map[string]any{"hostname": map[string]any{"value": "*" + lowerQuery + "*", "case_insensitive": true}}})
-		
+
 		must = append(must, map[string]any{"bool": map[string]any{"should": should, "minimum_should_match": 1}})
 	}
 	for field := range map[string]bool{"severity.keyword": true, "log_category.keyword": true, "hostname.keyword": true} {
 		param := strings.TrimSuffix(field, ".keyword")
-		if value := strings.TrimSpace(values.Get(param)); value != "" { must = append(must, map[string]any{"term": map[string]any{field: value}}) }
+		if value := strings.TrimSpace(values.Get(param)); value != "" {
+			must = append(must, map[string]any{"term": map[string]any{field: value}})
+		}
 	}
 	if from, to := values.Get("from"), values.Get("to"); from != "" || to != "" {
 		rangeQuery := map[string]any{}
-		if from != "" { rangeQuery["gte"] = from }
-		if to != "" { rangeQuery["lte"] = to }
+		if from != "" {
+			rangeQuery["gte"] = from
+		}
+		if to != "" {
+			rangeQuery["lte"] = to
+		}
 		must = append(must, map[string]any{"range": map[string]any{"event_time": rangeQuery}})
 	}
 	query := map[string]any{"from": (page - 1) * pageSize, "size": pageSize, "track_total_hits": true, "sort": []any{map[string]any{"event_time": "desc"}}, "query": map[string]any{"bool": map[string]any{"must": must}}}
@@ -446,11 +473,18 @@ func (handler *Handler) events(response http.ResponseWriter, request *http.Reque
 	}
 	var payload struct {
 		Hits struct {
-			Total struct { Value int64 `json:"value"` } `json:"total"`
-			Hits []struct { Source map[string]any `json:"_source"` } `json:"hits"`
+			Total struct {
+				Value int64 `json:"value"`
+			} `json:"total"`
+			Hits []struct {
+				Source map[string]any `json:"_source"`
+			} `json:"hits"`
 		} `json:"hits"`
 	}
-	if err := json.Unmarshal(result, &payload); err != nil { writeError(response, http.StatusBadGateway, err); return }
+	if err := json.Unmarshal(result, &payload); err != nil {
+		writeError(response, http.StatusBadGateway, err)
+		return
+	}
 	items := make([]map[string]any, 0, len(payload.Hits.Hits))
 	for _, hit := range payload.Hits.Hits {
 		event := hit.Source

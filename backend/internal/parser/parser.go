@@ -375,6 +375,10 @@ type Consumer struct {
 	stream, group, name string
 }
 
+// FailureHandler is called for messages that cannot be processed successfully.
+// The message remains pending until the handler returns nil.
+type FailureHandler func(context.Context, redis.XMessage, error) error
+
 func NewConsumer(redisURL, stream, group, name string) (*Consumer, error) {
 	options, err := redis.ParseURL(redisURL)
 	if err != nil {
@@ -410,6 +414,16 @@ func (consumer *Consumer) Consume(ctx context.Context, handler func(context.Cont
 }
 
 func (consumer *Consumer) ConsumeBatch(ctx context.Context, batchSize, workers int, handler func(context.Context, []NormalizedEvent) error) error {
+	return consumer.consumeBatch(ctx, batchSize, workers, handler, nil)
+}
+
+// ConsumeBatchWithFailureHandler processes messages and delegates failed
+// messages to failureHandler instead of stopping the consumer.
+func (consumer *Consumer) ConsumeBatchWithFailureHandler(ctx context.Context, batchSize, workers int, handler func(context.Context, []NormalizedEvent) error, failureHandler FailureHandler) error {
+	return consumer.consumeBatch(ctx, batchSize, workers, handler, failureHandler)
+}
+
+func (consumer *Consumer) consumeBatch(ctx context.Context, batchSize, workers int, handler func(context.Context, []NormalizedEvent) error, failureHandler FailureHandler) error {
 	if err := consumer.EnsureGroup(ctx); err != nil {
 		return err
 	}
@@ -513,11 +527,31 @@ func (consumer *Consumer) ConsumeBatch(ctx context.Context, batchSize, workers i
 			}()
 			for result := range results {
 				if result.err != nil {
+					if failureHandler != nil {
+						if err := failureHandler(ctx, stream.Messages[result.index], result.err); err != nil {
+							return fmt.Errorf("handle failed event %s: %w", stream.Messages[result.index].ID, err)
+						}
+						if err := consumer.redis.XAck(ctx, consumer.stream, consumer.group, stream.Messages[result.index].ID).Err(); err != nil {
+							return fmt.Errorf("ack failed event %s: %w", stream.Messages[result.index].ID, err)
+						}
+						continue
+					}
 					return fmt.Errorf("parse event %s: %w", stream.Messages[result.index].ID, result.err)
 				}
 				events[result.index] = result.event
 			}
 			if err := handler(ctx, events); err != nil {
+				if failureHandler != nil {
+					for _, message := range stream.Messages {
+						if failureErr := failureHandler(ctx, message, err); failureErr != nil {
+							return fmt.Errorf("handle failed event %s: %w", message.ID, failureErr)
+						}
+						if ackErr := consumer.redis.XAck(ctx, consumer.stream, consumer.group, message.ID).Err(); ackErr != nil {
+							return fmt.Errorf("ack failed event %s: %w", message.ID, ackErr)
+						}
+					}
+					continue
+				}
 				return fmt.Errorf("handle batch: %w", err)
 			}
 			for _, message := range stream.Messages {

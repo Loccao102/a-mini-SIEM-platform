@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -50,31 +52,32 @@ func main() {
 	}
 	redisClient := redis.NewClient(redisOpts)
 	dedupManager := dedup.NewManager(redisClient)
-	
+
 	// Initialize API key manager for agent authentication
 	apiKeyMgr := apikey.New(postgres)
-	
+
 	// Initialize rate limiter (1000 requests per minute per hostname)
 	rateLimiter := ratelimit.New(redisClient, 1000, 1*time.Minute)
-	
+
 	// Initialize DLQ manager for failed event handling
 	dlqManager := dlq.New(redisClient)
 	if err := dlqManager.EnsureStreams(ctx); err != nil {
 		log.Fatalf("ensure dlq streams: %v", err)
 	}
-	
+
 	// Initialize health checker
 	healthChecker := health.New(postgres, redisClient)
-	
+
 	// Initialize metrics collection
 	queueMetrics := metrics.New()
-	
+
 	// Create handler with all components
 	handler := api.New(postgres, storage.NewElasticsearch(env("ELASTICSEARCH_URL", "http://localhost:9200")), ingestClient, authManager, dedupManager, apiKeyMgr, rateLimiter, dlqManager, healthChecker, queueMetrics)
 	elastic := storage.NewElasticsearch(env("ELASTICSEARCH_URL", "http://localhost:9200"))
 	if err := elastic.EnsureIndex(ctx); err != nil {
 		log.Fatalf("prepare Elasticsearch index: %v", err)
 	}
+	consumer, err := parser.NewConsumer(env("REDIS_URL", "redis://localhost:6379/0"), env("REDIS_STREAM", ingest.DefaultStream), env("PARSER_GROUP", parser.DefaultConsumerGroup), env("PARSER_CONSUMER", hostname()))
 	if err != nil {
 		log.Fatalf("create parser consumer: %v", err)
 	}
@@ -84,21 +87,41 @@ func main() {
 		log.Fatalf("create rule engine: %v", err)
 	}
 	defer engine.Close()
-	go func() {
-		err := consumer.ConsumeBatch(ctx, envInt("PARSER_BATCH_SIZE", 100), envInt("PARSER_WORKERS", 4), func(ctx context.Context, events []parser.NormalizedEvent) error {
-			bulk := make([]any, len(events))
-			for index := range events {
-				bulk[index] = events[index]
-			}
-			if err := elastic.BulkIndexEvents(ctx, bulk); err != nil {
+	processEvents := func(ctx context.Context, events []parser.NormalizedEvent) error {
+		bulk := make([]any, len(events))
+		for index := range events {
+			bulk[index] = events[index]
+		}
+		if err := elastic.BulkIndexEvents(ctx, bulk); err != nil {
+			return err
+		}
+		for _, event := range events {
+			if err := engine.Process(ctx, event); err != nil {
 				return err
 			}
-			for _, event := range events {
-				if err := engine.Process(ctx, event); err != nil {
-					return err
-				}
+		}
+		return nil
+	}
+	go func() {
+		err := dlqManager.ConsumeRetry(ctx, env("PARSER_RETRY_CONSUMER", hostname()+"-retry"), int64(envInt("PARSER_BATCH_SIZE", 100)), func(ctx context.Context, message *dlq.DeadLetterMessage) error {
+			var values map[string]any
+			if err := json.Unmarshal(message.Payload, &values); err != nil {
+				return fmt.Errorf("decode retry payload: %w", err)
 			}
-			return nil
+			return processEvents(ctx, []parser.NormalizedEvent{parser.Parse(redis.XMessage{ID: message.OriginalID, Values: values})})
+		})
+		if err != nil && ctx.Err() == nil {
+			log.Printf("retry consumer stopped: %v", err)
+		}
+	}()
+	go func() {
+		err := consumer.ConsumeBatchWithFailureHandler(ctx, envInt("PARSER_BATCH_SIZE", 100), envInt("PARSER_WORKERS", 4), processEvents, func(ctx context.Context, message redis.XMessage, processingErr error) error {
+			payload, err := json.Marshal(message.Values)
+			if err != nil {
+				return fmt.Errorf("encode failed event %s: %w", message.ID, err)
+			}
+			_, err = dlqManager.SendToRetry(ctx, message.ID, string(payload), 0, "parser", map[string]string{"error": processingErr.Error()})
+			return err
 		})
 		if err != nil && ctx.Err() == nil {
 			log.Printf("parser stopped: %v", err)
@@ -204,6 +227,14 @@ func env(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func hostname() string {
+	value, err := os.Hostname()
+	if err != nil {
+		return "api-1"
+	}
+	return value
 }
 
 func envInt(key string, fallback int) int {

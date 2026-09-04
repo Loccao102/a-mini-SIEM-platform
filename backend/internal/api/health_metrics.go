@@ -5,9 +5,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/dlq"
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/health"
-	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/metrics"
 )
 
 // HealthzResponse represents the response structure for health checks
@@ -19,15 +17,15 @@ type HealthzResponse struct {
 
 // MetricsResponse represents pipeline metrics
 type MetricsResponse struct {
-	Status  string                 `json:"status"`
-	Data    map[string]interface{} `json:"data"`
-	Uptime  int64                  `json:"uptime_seconds"`
+	Status string                 `json:"status"`
+	Data   map[string]interface{} `json:"data"`
+	Uptime int64                  `json:"uptime_seconds"`
 }
 
 // DLQResponse represents DLQ operations response
 type DLQResponse struct {
-	Status  string            `json:"status"`
-	Message string            `json:"message"`
+	Status  string                 `json:"status"`
+	Message string                 `json:"message"`
 	Stats   map[string]interface{} `json:"stats"`
 }
 
@@ -46,7 +44,7 @@ func (h *Handler) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	
+
 	// Return 503 if unhealthy, 200 if healthy/degraded
 	if overallStatus == health.StatusUnhealthy {
 		w.WriteHeader(http.StatusServiceUnavailable)
@@ -154,7 +152,7 @@ func (h *Handler) handleDLQPurge(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var hours int64
-	if _, err := json.Unmarshal([]byte(olderThanHours), &hours); err != nil {
+	if err := json.Unmarshal([]byte(olderThanHours), &hours); err != nil {
 		hours = 24
 	}
 
