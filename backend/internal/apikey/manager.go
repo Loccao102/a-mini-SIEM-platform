@@ -105,9 +105,9 @@ func (m *Manager) ValidateKey(ctx context.Context, rawKey string) (*APIKey, erro
 	var ak APIKey
 	var lastUsed *time.Time
 	err := m.db.QueryRow(ctx,
-		`SELECT api_key_id, asset_id, hostname, key_hash, display_key, status, created_at, expires_at, last_used_at, request_count
-		 FROM api_keys
-		 WHERE key_hash = $1`,
+		`SELECT k.api_key_id, k.asset_id, a.hostname, k.key_hash, k.display_key, k.status, k.created_at, k.expires_at, k.last_used_at, k.request_count
+		 FROM api_keys k JOIN assets a ON a.asset_id = k.asset_id
+		 WHERE k.key_hash = $1`,
 		keyHash,
 	).Scan(&ak.KeyID, &ak.AssetID, &ak.Hostname, &ak.KeyHash, &ak.DisplayKey, &ak.Status, &ak.CreatedAt, &ak.ExpiresAt, &lastUsed, &ak.RequestCount)
 
