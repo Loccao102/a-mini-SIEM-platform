@@ -19,7 +19,6 @@ export default function SoarPage() {
   const [playbooks, setPlaybooks] = useState<Playbook[]>([]);
   const [executions, setExecutions] = useState<Execution[]>([]);
   const [blocked, setBlocked] = useState<BlockedEntity[]>([]);
-  const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<{ text: string; type: "success" | "error" } | null>(null);
   const [actionInProgress, setActionInProgress] = useState<number | null>(null);
 
@@ -37,15 +36,20 @@ export default function SoarPage() {
       if (err instanceof ApiError && err.status === 401) {
         setMessage({ text: "Đăng nhập để xem trạng thái SOAR.", type: "error" });
       }
-    } finally {
-      setLoading(false);
     }
   }
 
   useEffect(() => {
-    loadData();
-    const interval = window.setInterval(loadData, 5000);
-    return () => window.clearInterval(interval);
+    const timer = window.setTimeout(() => {
+      void loadData();
+    }, 0);
+    const interval = window.setInterval(() => {
+      void loadData();
+    }, 5000);
+    return () => {
+      window.clearTimeout(timer);
+      window.clearInterval(interval);
+    };
   }, []);
 
   async function handleApprove(id: number) {
@@ -149,7 +153,7 @@ export default function SoarPage() {
                     <span className="text-xs font-mono bg-amber-500/20 text-amber-300 px-2 py-0.5 rounded">
                       #{exec.execution_id}
                     </span>
-                    <strong className="text-sm font-semibold">{exec.action_type.toUpperCase()}</strong>
+                    <strong className="text-sm font-semibold">{exec.action_type?.toUpperCase() ?? "ACTION"}</strong>
                     <span className="text-xs text-gray-400">từ Alert #{exec.alert_id ?? "N/A"}</span>
                   </div>
                   <div className="text-xs text-gray-300">
@@ -219,7 +223,7 @@ export default function SoarPage() {
                   <tr key={item.blocked_id} className="hover:bg-zinc-800/30">
                     <td className="p-3">
                       <span className="px-2 py-0.5 text-[11px] font-mono rounded bg-rose-500/20 text-rose-300 border border-rose-500/40">
-                        {item.entity_type.toUpperCase()}
+                        {item.entity_type?.toUpperCase() ?? "ENTITY"}
                       </span>
                     </td>
                     <td className="p-3 font-mono font-bold text-amber-300">{item.entity_value}</td>
@@ -308,3 +312,4 @@ export default function SoarPage() {
     </main>
   );
 }
+

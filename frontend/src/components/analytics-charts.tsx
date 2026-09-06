@@ -2,7 +2,8 @@
 
 import { AnalyticsData } from "@/lib/api";
 
-function countryFlag(code: string) {
+function countryFlag(code?: string) {
+  if (!code) return "🌐";
   switch (code.toUpperCase()) {
     case "DE":
       return "🇩🇪";
@@ -15,6 +16,7 @@ function countryFlag(code: string) {
     case "VN":
       return "🇻🇳";
     case "LAN":
+    case "PRIVATE":
       return "🏠";
     default:
       return "🌐";
@@ -208,7 +210,7 @@ export function AnalyticsCharts({ data }: { data: AnalyticsData | null }) {
                   <td className="py-3">
                     <span className="mr-2 text-base">{countryFlag(ip.country_code)}</span>
                     <span>
-                      {ip.country} ({ip.country_code})
+                      {ip.country || "Local / Private"} ({ip.country_code || "LAN"})
                     </span>
                   </td>
                   <td className="py-3 text-(--amber)">{ip.threat_category ?? "Unknown"}</td>

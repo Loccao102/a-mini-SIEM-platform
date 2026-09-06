@@ -99,8 +99,8 @@ func TestAuthenticationAndAdminRBAC(t *testing.T) {
 	}
 
 	credentials := map[string]string{
-		"email":    env("INTEGRATION_ADMIN_EMAIL", "admin@example.com"),
-		"password": env("INTEGRATION_ADMIN_PASSWORD", "change-me-now"),
+		"email":    env("INTEGRATION_ADMIN_EMAIL", env("ADMIN_EMAIL", "admin@example.com")),
+		"password": env("INTEGRATION_ADMIN_PASSWORD", env("ADMIN_PASSWORD", "admin")),
 	}
 	body, err := json.Marshal(credentials)
 	if err != nil {

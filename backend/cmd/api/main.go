@@ -176,7 +176,7 @@ func main() {
 					SELECT a.alert_id, a.severity, COALESCE(r.name, a.summary), COALESCE(a.entity_key, '')
 					FROM alerts a
 					LEFT JOIN rules r ON r.rule_id = a.rule_id
-					WHERE a.created_at >= now() - interval '5 minutes'
+					WHERE a.triggered_at >= now() - interval '10 minutes'
 					AND NOT EXISTS (SELECT 1 FROM playbook_executions pe WHERE pe.alert_id = a.alert_id)
 					ORDER BY a.alert_id DESC LIMIT 20
 				`)
@@ -205,6 +205,15 @@ func main() {
 						targetUser = parts[1]
 					} else {
 						targetIP = pa.entity
+					}
+					if targetIP == "" {
+						_ = postgres.QueryRow(ctx, `
+							SELECT COALESCE(de.evidence->>'src_ip', '')
+							FROM alert_events ae
+							JOIN detection_events de ON de.event_id = ae.event_id
+							WHERE ae.alert_id = $1 AND COALESCE(de.evidence->>'src_ip', '') <> ''
+							LIMIT 1
+						`, pa.id).Scan(&targetIP)
 					}
 					category := "generic"
 					if strings.Contains(strings.ToLower(pa.ruleName), "ssh") || strings.Contains(strings.ToLower(pa.ruleName), "chain") {

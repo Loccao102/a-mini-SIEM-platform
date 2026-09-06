@@ -8,8 +8,9 @@ const labels: Record<Severity, string> = {
   info: "Low",
 };
 
-export function SeverityBadge({ severity }: { severity: string }) {
-  const normalized = (severity.toLowerCase() in labels ? severity.toLowerCase() : "low") as Severity;
+export function SeverityBadge({ severity }: { severity?: string }) {
+  const sevKey = (severity ?? "low").toLowerCase();
+  const normalized = (sevKey in labels ? sevKey : "low") as Severity;
 
   return (
     <span className={`severity-badge severity-${normalized}`}>

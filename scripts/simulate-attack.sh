@@ -23,11 +23,21 @@ if [ -z "$TOKEN" ]; then
 fi
 echo "[+] Authenticated successfully."
 
-echo "[*] Step 2: Generating Ingest API Key..."
-API_KEY=$(curl -s -X POST "$SIEM_URL/api/v1/assets/1/keys" \
+echo "[*] Step 2: Enrolling Fleet Agent & Generating Ingest API Key..."
+AGENT_ID="bash-demo-agent-01"
+ASSET_ID=$(curl -s -X POST "$SIEM_URL/api/v1/fleet/agents" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"name":"bash-demo-agent","expires_in_days":7}' | grep -o '"raw_key":"[^"]*' | cut -d'"' -f4)
+  -d "{\"agent_id\":\"$AGENT_ID\",\"hostname\":\"$TARGET_HOST\",\"os_type\":\"linux\",\"criticality\":\"high\",\"source_types\":[\"linux_sshd\",\"syslog\"]}" | grep -o '"asset_id":[0-9]*' | cut -d: -f2)
+
+if [ -z "$ASSET_ID" ]; then
+  ASSET_ID=$(curl -s -X GET "$SIEM_URL/api/v1/assets" -H "Authorization: Bearer $TOKEN" | grep -o '"asset_id":[0-9]*' | head -n1 | cut -d: -f2)
+fi
+
+API_KEY=$(curl -s -X POST "$SIEM_URL/api/v1/assets/$ASSET_ID/keys" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"bash-demo-agent","expires_in_days":7}' | grep -o '"api_key":"[^"]*' | cut -d'"' -f4)
 
 if [ -z "$API_KEY" ]; then
   echo "[-] Failed to generate key."
@@ -38,29 +48,26 @@ echo "[+] Ingest Key generated."
 echo "[*] Step 3: Sending 4 Failed SSH Logins (MITRE T1110)..."
 for i in 1 2 3 4; do
   curl -s -X POST "$SIEM_URL/api/v1/ingest" \
-    -H "X-API-Key: $API_KEY" \
-    -H "X-Hostname: $TARGET_HOST" \
+    -H "Authorization: Bearer $API_KEY" \
     -H "Content-Type: application/json" \
-    -d "{\"raw\":\"sshd[100$i]: Failed password for $TARGET_USER from $ATTACKER_IP port 5000$i ssh2\",\"source_type\":\"auth\",\"hostname\":\"$TARGET_HOST\"}" > /dev/null
+    -d "{\"message\":\"sshd[100$i]: Failed password for $TARGET_USER from $ATTACKER_IP port 5000$i ssh2\",\"source_type\":\"linux_sshd\",\"hostname\":\"$TARGET_HOST\",\"agent_id\":\"$AGENT_ID\"}" > /dev/null
   echo "  [>] Failed login #$i sent."
   sleep 0.2
 done
 
 echo "[*] Step 4: Sending 1 Successful SSH Login (MITRE T1078)..."
 curl -s -X POST "$SIEM_URL/api/v1/ingest" \
-  -H "X-API-Key: $API_KEY" \
-  -H "X-Hostname: $TARGET_HOST" \
+  -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
-  -d "{\"raw\":\"sshd[1005]: Accepted password for $TARGET_USER from $ATTACKER_IP port 50005 ssh2\",\"source_type\":\"auth\",\"hostname\":\"$TARGET_HOST\"}" > /dev/null
+  -d "{\"message\":\"sshd[1005]: Accepted password for $TARGET_USER from $ATTACKER_IP port 50005 ssh2\",\"source_type\":\"linux_sshd\",\"hostname\":\"$TARGET_HOST\",\"agent_id\":\"$AGENT_ID\"}" > /dev/null
 echo "  [>] Successful login sent."
 sleep 0.3
 
 echo "[*] Step 5: Sending Privilege Escalation Event (MITRE T1548.003)..."
 curl -s -X POST "$SIEM_URL/api/v1/ingest" \
-  -H "X-API-Key: $API_KEY" \
-  -H "X-Hostname: $TARGET_HOST" \
+  -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
-  -d "{\"raw\":\"sudo:   $TARGET_USER : TTY=pts/1 ; PWD=/home/$TARGET_USER ; USER=root ; COMMAND=/bin/bash\",\"source_type\":\"auth\",\"hostname\":\"$TARGET_HOST\"}" > /dev/null
+  -d "{\"message\":\"sudo:   $TARGET_USER : TTY=pts/1 ; PWD=/home/$TARGET_USER ; USER=root ; COMMAND=/bin/bash\",\"source_type\":\"linux_sshd\",\"hostname\":\"$TARGET_HOST\",\"agent_id\":\"$AGENT_ID\"}" > /dev/null
 echo "  [>] Privilege escalation sent."
 
 echo ""
@@ -69,3 +76,4 @@ echo " 🛡️ Attack Chain Ingested! Correlation Engine & SOAR Triggered."
 echo " 👉 Open Web Dashboard: http://localhost:3000/soar"
 echo "    to approve the containment action and isolate IP $ATTACKER_IP."
 echo "================================================================="
+
