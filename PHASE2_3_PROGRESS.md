@@ -61,3 +61,4 @@
 - [x] Ánh xạ kỹ thuật MITRE ATT&CK: `T1110` (Brute Force), `T1078` (Valid Accounts), `T1548.003` (Sudo / Privilege Escalation).
 - [x] Endpoint `GET /api/v1/detection/findings` cho phép SOC analyst điều tra chuỗi tấn công kèm bằng chứng JSON chi tiết.
 - [x] Xử lý sự kiện sai thứ tự, sự kiện đến muộn (bounded lateness) và loại trừ duplicate.
+

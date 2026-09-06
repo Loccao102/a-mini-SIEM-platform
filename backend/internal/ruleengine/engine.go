@@ -51,14 +51,23 @@ func (engine *Engine) Process(ctx context.Context, event parser.NormalizedEvent)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
 
+	var rules []Rule
 	for rows.Next() {
 		var rule Rule
 		if err := rows.Scan(&rule.ID, &rule.Name, &rule.Pattern, &rule.TargetField, &rule.Severity, &rule.Enabled, &rule.Condition); err != nil {
+			rows.Close()
 			return err
 		}
+		rules = append(rules, rule)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
 
+	for _, rule := range rules {
 		matched, err := regexp.MatchString(rule.Pattern, fieldValue(event, rule.TargetField))
 		if err != nil {
 			return fmt.Errorf("invalid regex in rule %d: %w", rule.ID, err)
@@ -70,7 +79,7 @@ func (engine *Engine) Process(ctx context.Context, event parser.NormalizedEvent)
 			}
 		}
 	}
-	return rows.Err()
+	return nil
 }
 
 func (engine *Engine) createOrAggregateAlert(ctx context.Context, rule Rule, event parser.NormalizedEvent) error {

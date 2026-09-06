@@ -18,7 +18,12 @@ import (
 
 func phaseDB(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	p, e := pgxpool.New(context.Background(), env("INTEGRATION_POSTGRES_URL", "postgres://siem:siem_dev_password@localhost:5432/siem?sslmode=disable"))
+	cfg, err := pgxpool.ParseConfig(env("INTEGRATION_POSTGRES_URL", "postgres://siem:siem_dev_password@localhost:5432/siem?sslmode=disable"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.MaxConns = 30
+	p, e := pgxpool.NewWithConfig(context.Background(), cfg)
 	if e != nil {
 		t.Fatal(e)
 	}
