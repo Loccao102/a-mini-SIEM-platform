@@ -5,15 +5,16 @@ package integration
 import (
 	"context"
 	"fmt"
-	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/correlation"
-	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/parser"
-	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/ruleengine"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"net/http"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/correlation"
+	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/parser"
+	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/ruleengine"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func phaseDB(t *testing.T) *pgxpool.Pool {
