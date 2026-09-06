@@ -65,6 +65,13 @@ export default function CasesPage() {
     setTimeline(await getCaseTimeline(selected.case_id));
   }
 
+  function handleExportReport() {
+    if (!selected) return;
+    const token = typeof window !== "undefined" ? localStorage.getItem("siem_token") : "";
+    const apiURL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
+    window.open(`${apiURL}/api/v1/cases/${selected.case_id}/report?token=${encodeURIComponent(token || "")}`, "_blank");
+  }
+
   return (
     <main className="account-shell">
       <header className="account-header">
@@ -94,6 +101,11 @@ export default function CasesPage() {
             <select value={selected.status} onChange={(event) => void handleStatus(event.target.value as CaseRecord["status"])}>
               <option value="open">Open</option><option value="investigating">Investigating</option><option value="resolved">Resolved</option><option value="closed">Closed</option>
             </select>
+            <div className="mt-3">
+              <button type="button" onClick={handleExportReport} className="w-full text-xs font-semibold py-2 px-3 border border-blue-500 text-blue-400 hover:bg-blue-950/40 rounded transition-colors">
+                📄 Xuất Báo Cáo Incident (PDF / In)
+              </button>
+            </div>
             <form onSubmit={handleNote} className="mt-4 grid gap-2">
               <textarea placeholder="Ghi chú điều tra" value={note} onChange={(event) => setNote(event.target.value)} />
               <button type="submit">Thêm ghi chú</button>

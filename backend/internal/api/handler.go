@@ -19,6 +19,7 @@ import (
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/metrics"
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/parser"
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/ratelimit"
+	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/soar"
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/storage"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -35,6 +36,7 @@ type Handler struct {
 	dlqManager    *dlq.Manager
 	healthChecker *health.HealthChecker
 	metrics       *metrics.QueueMetrics
+	soarEngine    *soar.Engine
 }
 
 func New(postgres *pgxpool.Pool, elastic *storage.Elasticsearch, ingestClient *ingest.Client, authManager *auth.Manager, dedupManager *dedup.Manager, apiKeyMgr *apikey.Manager, limiter *ratelimit.Limiter, dlqMgr *dlq.Manager, hc *health.HealthChecker, met *metrics.QueueMetrics) *Handler {
@@ -86,11 +88,20 @@ func (handler *Handler) Routes() http.Handler {
 	mux.Handle("/api/v1/alerts/{id}", handler.requireRole("viewer", http.HandlerFunc(handler.alertsRoute)))
 	mux.Handle("/api/v1/cases", handler.requireRole("viewer", http.HandlerFunc(handler.casesRoute)))
 	mux.Handle("/api/v1/cases/{id}", handler.requireRole("viewer", http.HandlerFunc(handler.casesRoute)))
+	mux.Handle("GET /api/v1/cases/{id}/report", handler.requireRole("viewer", http.HandlerFunc(handler.caseReport)))
 	mux.Handle("/api/v1/cases/{id}/notes", handler.requireRole("analyst", http.HandlerFunc(handler.caseNotesRoute)))
 	mux.Handle("/api/v1/cases/{id}/timeline", handler.requireRole("viewer", http.HandlerFunc(handler.caseTimeline)))
 	mux.Handle("/api/v1/cases/{id}/alerts/{alert_id}", handler.requireRole("analyst", http.HandlerFunc(handler.caseAlertRoute)))
 	mux.Handle("/api/v1/users", handler.requireRole("admin", http.HandlerFunc(handler.usersRoute)))
 	mux.Handle("/api/v1/users/{id}", handler.requireRole("admin", http.HandlerFunc(handler.usersRoute)))
+
+	// SOAR automated response and containment endpoints
+	mux.Handle("GET /api/v1/soar/playbooks", handler.requireRole("viewer", http.HandlerFunc(handler.soarPlaybooks)))
+	mux.Handle("GET /api/v1/soar/executions", handler.requireRole("viewer", http.HandlerFunc(handler.soarExecutions)))
+	mux.Handle("POST /api/v1/soar/executions/{id}/approve", handler.requireRole("analyst", http.HandlerFunc(handler.soarApprove)))
+	mux.Handle("POST /api/v1/soar/executions/{id}/reject", handler.requireRole("analyst", http.HandlerFunc(handler.soarReject)))
+	mux.Handle("GET /api/v1/soar/blocked", handler.requireRole("viewer", http.HandlerFunc(handler.soarBlocked)))
+	mux.Handle("POST /api/v1/soar/blocked/{id}/release", handler.requireRole("analyst", http.HandlerFunc(handler.soarReleaseBlocked)))
 
 	// Health and monitoring endpoints (no auth required)
 	mux.HandleFunc("GET /healthz", handler.handleHealthz)
@@ -135,6 +146,12 @@ func (handler *Handler) login(response http.ResponseWriter, request *http.Reques
 func (handler *Handler) requireRole(role string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		token, err := auth.Bearer(request.Header.Get("Authorization"))
+		if err != nil {
+			if qToken := request.URL.Query().Get("token"); qToken != "" {
+				token = qToken
+				err = nil
+			}
+		}
 		if err != nil {
 			writeError(response, http.StatusUnauthorized, err)
 			return

@@ -1,6 +1,7 @@
 services:
   postgres:
     image: postgres:17-alpine
+    mem_limit: 256m
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-siem}
       POSTGRES_USER: ${POSTGRES_USER:-siem}
@@ -18,6 +19,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    mem_limit: 128m
     command: ["redis-server", "--appendonly", "yes"]
     ports:
       - "${REDIS_PORT:-6379}:6379"
@@ -31,11 +33,12 @@ services:
 
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.19.0
+    mem_limit: 768m
     environment:
       discovery.type: single-node
       path.repo: /snapshots
       xpack.security.enabled: "false"
-      ES_JAVA_OPTS: -Xms512m -Xmx512m
+      ES_JAVA_OPTS: -Xms256m -Xmx384m
     ports:
       - "${ELASTICSEARCH_PORT:-9200}:9200"
     volumes:
@@ -50,6 +53,7 @@ services:
 
   backend:
     build: ./backend
+    mem_limit: 256m
     environment:
       API_ADDR: :8080
       EVENT_RETENTION_DAYS: ${EVENT_RETENTION_DAYS:-30}
@@ -129,6 +133,7 @@ services:
   ingest:
     build: ./backend
     entrypoint: ["/siem-ingest"]
+    mem_limit: 128m
     environment:
       REDIS_URL: redis://redis:6379/0
     depends_on:
@@ -137,6 +142,7 @@ services:
 
   frontend:
     build: ./frontend
+    mem_limit: 512m
     environment:
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8080}
       NEXT_PUBLIC_MODE: ${MODE:-production}

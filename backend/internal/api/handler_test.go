@@ -76,3 +76,37 @@ func TestNormalizeFleetEnrollment(t *testing.T) {
 		t.Fatalf("fleet agent tag not normalized: %#v", result.Tags)
 	}
 }
+
+func TestSOAREndpointsUnconfigured(t *testing.T) {
+	h := &Handler{} // soarEngine is nil
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/soar/playbooks", nil)
+	rec := httptest.NewRecorder()
+	h.soarPlaybooks(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503 Service Unavailable when SOAR unconfigured, got %d", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/soar/executions", nil)
+	rec = httptest.NewRecorder()
+	h.soarExecutions(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503, got %d", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/soar/blocked", nil)
+	rec = httptest.NewRecorder()
+	h.soarBlocked(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503, got %d", rec.Code)
+	}
+}
+
+func TestEscapeHTML(t *testing.T) {
+	raw := `<script>alert("xss & 'bad'");</script>`
+	escaped := escapeHTML(raw)
+	if escaped == raw || escaped != `&lt;script&gt;alert(&quot;xss &amp; &#39;bad&#39;&quot;);&lt;/script&gt;` {
+		t.Fatalf("unexpected escaped output: %s", escaped)
+	}
+}
+

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/parser"
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/ratelimit"
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/ruleengine"
+	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/soar"
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/storage"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
@@ -77,6 +79,8 @@ func main() {
 	elastic := storage.NewElasticsearch(env("ELASTICSEARCH_URL", "http://localhost:9200"))
 	healthChecker = health.New(postgres, redisClient, elastic)
 	handler := api.New(postgres, elastic, ingestClient, authManager, dedupManager, apiKeyMgr, rateLimiter, dlqManager, healthChecker, queueMetrics)
+	soarEngine := soar.NewEngine(postgres, nil)
+	handler.SetSOAR(soarEngine)
 	if err := elastic.EnsureIndex(ctx); err != nil {
 		log.Fatalf("prepare Elasticsearch index: %v", err)
 	}
@@ -157,6 +161,61 @@ func main() {
 			log.Printf("parser stopped: %v", err)
 		}
 	}()
+
+	// Background worker for SOAR: evaluates recent alerts and auto-releases expired blocks
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				_, _ = soarEngine.ReleaseExpired(ctx)
+				rows, err := postgres.Query(ctx, `
+					SELECT a.alert_id, a.severity, COALESCE(r.name, a.summary), COALESCE(a.entity_key, '')
+					FROM alerts a
+					LEFT JOIN rules r ON r.rule_id = a.rule_id
+					WHERE a.created_at >= now() - interval '5 minutes'
+					AND NOT EXISTS (SELECT 1 FROM playbook_executions pe WHERE pe.alert_id = a.alert_id)
+					ORDER BY a.alert_id DESC LIMIT 20
+				`)
+				if err != nil {
+					continue
+				}
+				type pendingAlert struct {
+					id       int64
+					sev      string
+					ruleName string
+					entity   string
+				}
+				var alerts []pendingAlert
+				for rows.Next() {
+					var pa pendingAlert
+					if err := rows.Scan(&pa.id, &pa.sev, &pa.ruleName, &pa.entity); err == nil {
+						alerts = append(alerts, pa)
+					}
+				}
+				rows.Close()
+				for _, pa := range alerts {
+					targetIP := ""
+					targetUser := ""
+					if strings.Contains(pa.entity, ":") {
+						parts := strings.SplitN(pa.entity, ":", 2)
+						targetUser = parts[1]
+					} else {
+						targetIP = pa.entity
+					}
+					category := "generic"
+					if strings.Contains(strings.ToLower(pa.ruleName), "ssh") || strings.Contains(strings.ToLower(pa.ruleName), "chain") {
+						category = "correlation"
+					}
+					_, _ = soarEngine.EvaluateAlert(ctx, pa.id, pa.sev, category, pa.ruleName, targetIP, targetUser)
+				}
+			}
+		}
+	}()
+
 	server := &http.Server{Addr: env("API_ADDR", ":8080"), Handler: handler.Routes()}
 
 	go func() {
@@ -179,6 +238,75 @@ func ensureSeedData(ctx context.Context, postgres *pgxpool.Pool, manager *auth.M
 		ALTER TABLE alerts ADD COLUMN IF NOT EXISTS occurrences INT NOT NULL DEFAULT 1;
 		ALTER TABLE alerts ADD COLUMN IF NOT EXISTS last_seen TIMESTAMPTZ NOT NULL DEFAULT now();
 		CREATE INDEX IF NOT EXISTS idx_alerts_rule_entity ON alerts (rule_id, entity_key, status);
+
+		CREATE TABLE IF NOT EXISTS playbooks (
+			playbook_id BIGSERIAL PRIMARY KEY,
+			name TEXT NOT NULL UNIQUE,
+			description TEXT,
+			trigger_type TEXT NOT NULL CHECK (trigger_type IN ('severity', 'category', 'rule_match')),
+			trigger_filter JSONB NOT NULL DEFAULT '{}'::jsonb,
+			action_type TEXT NOT NULL CHECK (action_type IN ('block_ip', 'isolate_user', 'notify_telegram')),
+			action_params JSONB NOT NULL DEFAULT '{}'::jsonb,
+			requires_approval BOOLEAN NOT NULL DEFAULT true,
+			enabled BOOLEAN NOT NULL DEFAULT true,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+		);
+
+		CREATE TABLE IF NOT EXISTS playbook_executions (
+			execution_id BIGSERIAL PRIMARY KEY,
+			playbook_id BIGINT REFERENCES playbooks(playbook_id) ON DELETE SET NULL,
+			alert_id BIGINT REFERENCES alerts(alert_id) ON DELETE CASCADE,
+			action_type TEXT NOT NULL,
+			target TEXT NOT NULL,
+			status TEXT NOT NULL CHECK (status IN ('pending_approval', 'approved', 'executed', 'rejected', 'failed', 'rolled_back')),
+			output JSONB NOT NULL DEFAULT '{}'::jsonb,
+			approved_by BIGINT REFERENCES users(user_id),
+			expires_at TIMESTAMPTZ,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+			executed_at TIMESTAMPTZ
+		);
+
+		CREATE TABLE IF NOT EXISTS blocked_entities (
+			blocked_id BIGSERIAL PRIMARY KEY,
+			entity_type TEXT NOT NULL CHECK (entity_type IN ('ip', 'user')),
+			entity_value TEXT NOT NULL,
+			reason TEXT NOT NULL,
+			execution_id BIGINT REFERENCES playbook_executions(execution_id) ON DELETE SET NULL,
+			status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'released')),
+			blocked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+			expires_at TIMESTAMPTZ,
+			released_at TIMESTAMPTZ,
+			released_by BIGINT REFERENCES users(user_id)
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_playbook_exec_status ON playbook_executions(status, created_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_blocked_entities_val ON blocked_entities(entity_type, entity_value, status);
+		CREATE INDEX IF NOT EXISTS idx_blocked_entities_exp ON blocked_entities(expires_at, status);
+
+		INSERT INTO playbooks (name, description, trigger_type, trigger_filter, action_type, action_params, requires_approval, enabled)
+		VALUES 
+			(
+				'Auto-Contain SSH Attack Chain IP',
+				'Automatically request approval to block source IP involved in multi-stage SSH brute force and privilege escalation',
+				'category',
+				'{"category": "correlation", "severity": "critical"}'::jsonb,
+				'block_ip',
+				'{"ttl_seconds": 3600, "firewall_driver": "simulated"}'::jsonb,
+				true,
+				true
+			),
+			(
+				'Isolate Compromised Account',
+				'Request approval to revoke privileges of account detected in privilege escalation anomaly',
+				'rule_match',
+				'{"rule_name": "SSH attack chain v1"}'::jsonb,
+				'isolate_user',
+				'{"action": "disable_account"}'::jsonb,
+				true,
+				true
+			)
+		ON CONFLICT (name) DO NOTHING;
 	`)
 
 	users := []struct {

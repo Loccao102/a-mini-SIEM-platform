@@ -14,7 +14,12 @@ func setupTestDB(t *testing.T) *pgxpool.Pool {
 
 	pool, err := pgxpool.New(ctx, "postgres://siem:siem_dev_password@localhost:5432/siem?sslmode=disable")
 	if err != nil {
-		t.Fatalf("connect to test database: %v", err)
+		t.Skipf("connect to test database: %v", err)
+		return nil
+	}
+	if err := pool.Ping(ctx); err != nil {
+		t.Skipf("PostgreSQL not available on localhost:5432: %v", err)
+		return nil
 	}
 
 	// Create test asset for API key tests
@@ -29,6 +34,9 @@ func setupTestDB(t *testing.T) *pgxpool.Pool {
 }
 
 func cleanupTestDB(t *testing.T, pool *pgxpool.Pool) {
+	if pool == nil {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	pool.Exec(ctx, `DELETE FROM api_keys WHERE key_hash LIKE 'test%'`)
