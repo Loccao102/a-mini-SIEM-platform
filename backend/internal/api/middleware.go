@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -143,7 +144,17 @@ func (handler *Handler) withRequestSizeLimit(maxSize int64) func(http.Handler) h
 			}
 
 			// Wrap request body with LimitedReader
-			r.Body = io.NopCloser(io.LimitReader(r.Body, maxSize))
+			body, err := io.ReadAll(io.LimitReader(r.Body, maxSize+1))
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+			if int64(len(body)) > maxSize {
+				writeError(w, http.StatusRequestEntityTooLarge, fmt.Errorf("payload too large"))
+				return
+			}
+			r.Body.Close()
+			r.Body = io.NopCloser(bytes.NewReader(body))
 
 			next.ServeHTTP(w, r)
 		})

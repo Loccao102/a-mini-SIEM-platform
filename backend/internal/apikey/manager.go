@@ -3,6 +3,7 @@ package apikey
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"time"
@@ -189,18 +190,6 @@ func (m *Manager) ListKeys(ctx context.Context, assetID int64) ([]APIKey, error)
 	return keys, rows.Err()
 }
 
-// hashKey creates a SHA256 hash of the API key for storage
-func hashKey(key string) string {
-	// In production, use proper bcrypt or argon2
-	// For now, using SHA256 for simplicity
-	return fmt.Sprintf("%x", hashSHA256([]byte(key)))
-}
-
-// Simple SHA256 hashing (in production use crypto/sha256 or bcrypt)
-func hashSHA256(data []byte) []byte {
-	hash := make([]byte, 32)
-	for i, b := range data {
-		hash[i%32] ^= b
-	}
-	return hash
-}
+// Versioned cryptographic digests deliberately reject legacy XOR keys.
+func hashKey(key string) string     { return fmt.Sprintf("sha256:%x", hashSHA256([]byte(key))) }
+func hashSHA256(data []byte) []byte { sum := sha256.Sum256(data); return sum[:] }

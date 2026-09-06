@@ -67,7 +67,9 @@ func (handler *Handler) Routes() http.Handler {
 	)
 	mux.Handle("POST /api/v1/ingest", ingestSecured)
 
-	mux.HandleFunc("POST /api/v1/fleet/agents", handler.fleetAgentEnroll)
+	mux.Handle("POST /api/v1/fleet/agents", handler.requireRole("admin", http.HandlerFunc(handler.fleetAgentEnroll)))
+	mux.Handle("POST /api/v1/assets/{id}/keys", handler.requireRole("admin", http.HandlerFunc(handler.createIngestKey)))
+	mux.Handle("GET /api/v1/detection/findings", handler.requireRole("viewer", http.HandlerFunc(handler.detectionFindings)))
 	mux.Handle("GET /api/v1/fleet/agents", handler.requireRole("viewer", http.HandlerFunc(handler.fleetAgents)))
 	mux.Handle("GET /api/v1/fleet/deployments", handler.requireRole("viewer", http.HandlerFunc(handler.fleetDeployments)))
 	mux.Handle("GET /api/v1/pipeline/alerts", handler.requireRole("viewer", http.HandlerFunc(handler.pipelineAlerts)))
@@ -478,6 +480,16 @@ func (handler *Handler) ingestLog(response http.ResponseWriter, request *http.Re
 	if payload.AgentID == "" {
 		payload.AgentID = payload.Agent.ID
 	}
+	if expected := request.Header.Get("X-Hostname"); expected == "" || !strings.EqualFold(payload.Hostname, expected) {
+		writeError(response, http.StatusForbidden, fmt.Errorf("hostname does not match API key asset"))
+		return
+	}
+	var enrolledAgent string
+	err := handler.postgres.QueryRow(request.Context(), "SELECT COALESCE(agent_id,'') FROM log_sources WHERE asset_id=$1 AND source_type=$2", request.Header.Get("X-Asset-ID"), payload.SourceType).Scan(&enrolledAgent)
+	if err != nil || enrolledAgent == "" || payload.AgentID != enrolledAgent {
+		writeError(response, http.StatusForbidden, fmt.Errorf("agent/source must be enrolled for this asset"))
+		return
+	}
 	if err := handler.registerLogSource(request, payload.Hostname, payload.SourceType, payload.AgentID); err != nil {
 		if err == pgx.ErrNoRows {
 			writeError(response, http.StatusUnprocessableEntity, fmt.Errorf("asset %q is not registered", payload.Hostname))
@@ -597,45 +609,11 @@ func valueOrEmpty(value *string) string {
 }
 
 func (handler *Handler) events(response http.ResponseWriter, request *http.Request) {
-	values := request.URL.Query()
-	page, _ := strconv.Atoi(values.Get("page"))
-	if page < 1 {
-		page = 1
+	query, page, pageSize, err := eventSearchQuery(request.URL.Query())
+	if err != nil {
+		writeError(response, http.StatusBadRequest, err)
+		return
 	}
-	pageSize, _ := strconv.Atoi(values.Get("page_size"))
-	if pageSize != 25 && pageSize != 50 && pageSize != 100 {
-		pageSize = 25
-	}
-	must := make([]any, 0, 5)
-	if query := strings.TrimSpace(values.Get("q")); query != "" {
-		// Build bool query with should clauses for both exact match and prefix/wildcard match
-		should := make([]any, 0)
-		// Exact word match on multiple fields
-		should = append(should, map[string]any{"multi_match": map[string]any{"query": query, "fields": []string{"message", "hostname", "log_category", "event_type", "username"}}})
-		// Wildcard match for substring search (case-insensitive via lowercase)
-		lowerQuery := strings.ToLower(query)
-		should = append(should, map[string]any{"wildcard": map[string]any{"message": map[string]any{"value": "*" + lowerQuery + "*", "case_insensitive": true}}})
-		should = append(should, map[string]any{"wildcard": map[string]any{"hostname": map[string]any{"value": "*" + lowerQuery + "*", "case_insensitive": true}}})
-
-		must = append(must, map[string]any{"bool": map[string]any{"should": should, "minimum_should_match": 1}})
-	}
-	for field := range map[string]bool{"severity.keyword": true, "log_category.keyword": true, "hostname.keyword": true} {
-		param := strings.TrimSuffix(field, ".keyword")
-		if value := strings.TrimSpace(values.Get(param)); value != "" {
-			must = append(must, map[string]any{"term": map[string]any{field: value}})
-		}
-	}
-	if from, to := values.Get("from"), values.Get("to"); from != "" || to != "" {
-		rangeQuery := map[string]any{}
-		if from != "" {
-			rangeQuery["gte"] = from
-		}
-		if to != "" {
-			rangeQuery["lte"] = to
-		}
-		must = append(must, map[string]any{"range": map[string]any{"event_time": rangeQuery}})
-	}
-	query := map[string]any{"from": (page - 1) * pageSize, "size": pageSize, "track_total_hits": true, "sort": []any{map[string]any{"event_time": "desc"}}, "query": map[string]any{"bool": map[string]any{"must": must}}}
 	result, err := handler.elastic.Search(request.Context(), query)
 	if err != nil {
 		writeError(response, http.StatusBadGateway, err)

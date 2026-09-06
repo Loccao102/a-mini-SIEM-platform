@@ -33,12 +33,14 @@ services:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.19.0
     environment:
       discovery.type: single-node
+      path.repo: /snapshots
       xpack.security.enabled: "false"
       ES_JAVA_OPTS: -Xms512m -Xmx512m
     ports:
       - "${ELASTICSEARCH_PORT:-9200}:9200"
     volumes:
       - elasticsearch_data:/usr/share/elasticsearch/data
+      - elasticsearch_snapshots:/snapshots
     healthcheck:
       test: ["CMD-SHELL", "curl -s http://localhost:9200/_cat/health | grep -qE 'green|yellow'"]
       interval: 10s
@@ -50,6 +52,10 @@ services:
     build: ./backend
     environment:
       API_ADDR: :8080
+      EVENT_RETENTION_DAYS: ${EVENT_RETENTION_DAYS:-30}
+      INTEL_FEED_FILE: ${INTEL_FEED_FILE:-}
+      INTEL_PROVIDER_URL: ${INTEL_PROVIDER_URL:-}
+      INTEL_PROVIDER_TOKEN: ${INTEL_PROVIDER_TOKEN:-}
       MODE: ${MODE:-production}
       POSTGRES_URL: postgres://${POSTGRES_USER:-siem}:${POSTGRES_PASSWORD:-siem_dev_password}@postgres:5432/${POSTGRES_DB:-siem}?sslmode=disable
       REDIS_URL: redis://redis:6379/0
@@ -144,3 +150,4 @@ volumes:
   postgres_data:
   redis_data:
   elasticsearch_data:
+  elasticsearch_snapshots:
