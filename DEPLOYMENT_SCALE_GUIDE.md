@@ -247,3 +247,4 @@ hey -n 5000 -c 20 -m POST \
 - **Response time**: p95 < **12ms** (do Redis Stream `XADD` phản hồi trong microsecond).
 - **CPU SIEM Backend**: < 15%.
 - **RAM toàn bộ**: Ổn định ở mức **~1.8GB**.
+

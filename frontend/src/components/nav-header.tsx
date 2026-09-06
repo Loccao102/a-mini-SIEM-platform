@@ -68,6 +68,7 @@ export function NavHeader() {
   const navigation = [
     ["/", "Overview", "overview"],
     ["/alerts", "Alerts", "alerts"],
+    ["/soar", "SOAR Actions", "soar"],
     ["/cases", "Cases", "cases"],
     ["/events", "Log Explorer", "events"],
     ["/rules", "Rules", "rules"],

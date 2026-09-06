@@ -281,3 +281,74 @@ export type AnalyticsData = {
 export function getAnalytics() {
   return request<AnalyticsData>("/api/v1/analytics");
 }
+
+export type Playbook = {
+  playbook_id: number;
+  name: string;
+  description: string;
+  trigger_type: string;
+  trigger_filter: Record<string, unknown>;
+  action_type: string;
+  action_params: Record<string, unknown>;
+  requires_approval: boolean;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type Execution = {
+  execution_id: number;
+  playbook_id?: number;
+  alert_id?: number;
+  action_type: string;
+  target: string;
+  status: "pending_approval" | "approved" | "executed" | "rejected" | "failed" | "rolled_back";
+  output: Record<string, unknown>;
+  approved_by?: number;
+  expires_at?: string;
+  created_at: string;
+  executed_at?: string;
+};
+
+export type BlockedEntity = {
+  blocked_id: number;
+  entity_type: "ip" | "user";
+  entity_value: string;
+  reason: string;
+  execution_id?: number;
+  status: "active" | "released";
+  blocked_at: string;
+  expires_at?: string;
+  released_at?: string;
+  released_by?: number;
+};
+
+export function getPlaybooks(): Promise<Playbook[]> {
+  return request<Playbook[]>("/api/v1/soar/playbooks");
+}
+
+export function getExecutions(limit = 50): Promise<Execution[]> {
+  return request<Execution[]>(`/api/v1/soar/executions?limit=${limit}`);
+}
+
+export function approveExecution(id: number): Promise<{ status: string; execution_id: number }> {
+  return request<{ status: string; execution_id: number }>(`/api/v1/soar/executions/${id}/approve`, {
+    method: "POST",
+  });
+}
+
+export function rejectExecution(id: number): Promise<{ status: string; execution_id: number }> {
+  return request<{ status: string; execution_id: number }>(`/api/v1/soar/executions/${id}/reject`, {
+    method: "POST",
+  });
+}
+
+export function getBlockedEntities(): Promise<BlockedEntity[]> {
+  return request<BlockedEntity[]>("/api/v1/soar/blocked");
+}
+
+export function releaseBlockedEntity(id: number): Promise<{ status: string; blocked_id: number }> {
+  return request<{ status: string; blocked_id: number }>(`/api/v1/soar/blocked/${id}/release`, {
+    method: "POST",
+  });
+}

@@ -1,23 +1,48 @@
-# A mini SIEM platform
+# Sentinel | Mini-SIEM & SOAR Cyber Defense Platform
 
-Nền tảng SIEM local gom:
+Nền tảng Giám sát An ninh (SIEM) và Phản ứng Tự động (SOAR) mã nguồn mở, tối ưu chi phí **0 đồng** (<2GB RAM), sẵn sàng thu thập và phân tích tương quan cho **20+ máy trạm (>200,000 logs/ngày)**.
 
 ```text
-Elastic Agent -> Logstash -> HTTP ingest -> Redis Stream -> Parser -> Elasticsearch
-                                                   -> Rule Engine -> PostgreSQL alerts
-                                                           -> Next.js dashboard
+[ 20+ Endpoints ] -> [ Nginx Gateway ] -> [ Go Ingest Replicas ] -> [ Redis Streams (50k cap) ]
+                                                                           │
+                                              ┌────────────────────────────┴────────────────────────────┐
+                                              ▼                                                         ▼
+                                   [ Elasticsearch 8.x ]                                    [ Threat Correlation Engine ]
+                               (Daily ILM + Best Compression)                              (MITRE T1110, T1078, T1548.003)
+                                                                                                        │
+                                                                                                        ▼
+                                                                                             [ SOAR Playbook Engine ]
+                                                                                          (Approval Gate & Rollback TTL)
+                                                                                                        │
+                                                                                                        ▼
+                                                                                             [ Cases & Incident Report ]
+                                                                                               (Printable SOC PDF / In)
 ```
+
+### ⚡ 1-Click Demo Tấn Công & Phòng Thủ Thực Chiến:
+Chỉ với 1 câu lệnh, kịch bản tự động mô phỏng chuỗi tấn công APT (Brute Force SSH $\rightarrow$ Đăng nhập $\rightarrow$ Leo thang đặc quyền), kích hoạt Correlation Engine và gọi SOAR Playbook:
+```bash
+python scripts/simulate-attack-chain.py
+# Hoặc trên Linux/Mac: ./scripts/simulate-attack.sh
+```
+Sau đó mở trình duyệt tại:
+- **SOAR Approval Console**: [http://localhost:3000/soar](http://localhost:3000/soar) $\rightarrow$ Bấm *"✓ Phê duyệt Chặn"* để cô lập IP tấn công.
+- **Incident Report**: [http://localhost:3000/cases](http://localhost:3000/cases) $\rightarrow$ Bấm *"📄 Xuất Báo Cáo Incident"* để xuất file PDF điều tra chuẩn SOC.
+
+---
+
+## Kiến trúc & Điểm Nổi Bật
 
 Elastic Agent thay thế Filebeat/Winlogbeat để quản lý thu thập log từ nhiều service/host theo một policy tập trung, hỗ trợ tốt hơn cho môi trường đa máy chủ, đa dịch vụ và dễ mở rộng ở giai đoạn sau. Đây là mô hình Fleet thật, không phải mock: Fleet Server luôn chạy cùng stack, agent enroll trực tiếp vào `fleet-server` trên cổng `8220`, và backend đồng bộ asset + `log_sources` theo hostname để nhiều client đều có thể gửi log lên cùng một server mà không cần khai báo thủ công từng host.
 
-Dashboard doc du lieu that tu API Go. Overview, Alerts va Log Explorer tu tai lai moi 3 giay.
+Dashboard đọc dữ liệu thật từ API Go. Overview, Alerts, SOAR và Log Explorer tự động đồng bộ thời gian thực.
 
-## Yeu cau
+## Yêu cầu Hệ thống
 
-- Docker Desktop dang chay
+- Docker Desktop đang chạy (hoặc Docker Engine trên Linux)
 - Docker Compose v2
-- PowerShell 5.1 hoac PowerShell 7
-- Cac port `3000`, `5432`, `6379`, `8080`, `9200`, `5044`, `8220` chua bi chiem
+- RAM tối thiểu: 3GB - 4GB (toàn bộ stack chạy mượt chỉ tốn ~1.9GB RAM)
+- Các port `3000`, `5432`, `6379`, `8080`, `9200`, `5044`, `8220` chưa bị chiếm
 
 ```powershell
 docker --version

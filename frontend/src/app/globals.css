@@ -143,6 +143,7 @@ body { background: var(--canvas); }
 .nav-icon { position: relative; display: inline-block; width: 14px; height: 14px; border: 1px solid currentColor; opacity: .75; }
 .nav-icon-overview { border-radius: 50%; }
 .nav-icon-alerts { border-width: 0 1px 1px 0; transform: rotate(45deg) scale(.75); }
+.nav-icon-soar { border-radius: 2px; transform: rotate(45deg) scale(.8); }
 .nav-icon-cases { border-radius: 2px; }
 .nav-icon-events { border-width: 1px 0; }
 .nav-icon-rules { border-radius: 50%; transform: scale(.65); }
