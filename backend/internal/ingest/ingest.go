@@ -67,6 +67,8 @@ func (client *Client) Status(ctx context.Context, group string) (StreamStatus, e
 func (client *Client) Publish(ctx context.Context, message Message) (string, error) {
 	return client.redis.XAdd(ctx, &redis.XAddArgs{
 		Stream: client.stream,
+		MaxLen: 50000,
+		Approx: true,
 		Values: map[string]any{
 			"raw":         message.Raw,
 			"source_type": message.SourceType,

@@ -29,17 +29,17 @@ type Playbook struct {
 }
 
 type Execution struct {
-	ID          int64           `json:"execution_id"`
-	PlaybookID  *int64          `json:"playbook_id,omitempty"`
-	AlertID     *int64          `json:"alert_id,omitempty"`
-	ActionType  string          `json:"action_type"`
-	Target      string          `json:"target"`
-	Status      string          `json:"status"` // pending_approval, approved, executed, rejected, failed, rolled_back
-	Output      json.RawMessage `json:"output"`
-	ApprovedBy  *int64          `json:"approved_by,omitempty"`
-	ExpiresAt   *time.Time      `json:"expires_at,omitempty"`
-	CreatedAt   time.Time       `json:"created_at"`
-	ExecutedAt  *time.Time      `json:"executed_at,omitempty"`
+	ID         int64           `json:"execution_id"`
+	PlaybookID *int64          `json:"playbook_id,omitempty"`
+	AlertID    *int64          `json:"alert_id,omitempty"`
+	ActionType string          `json:"action_type"`
+	Target     string          `json:"target"`
+	Status     string          `json:"status"` // pending_approval, approved, executed, rejected, failed, rolled_back
+	Output     json.RawMessage `json:"output"`
+	ApprovedBy *int64          `json:"approved_by,omitempty"`
+	ExpiresAt  *time.Time      `json:"expires_at,omitempty"`
+	CreatedAt  time.Time       `json:"created_at"`
+	ExecutedAt *time.Time      `json:"executed_at,omitempty"`
 }
 
 type BlockedEntity struct {
@@ -63,14 +63,14 @@ type Engine struct {
 
 func NewEngine(db *pgxpool.Pool, customAllowlist []string) *Engine {
 	al := map[string]bool{
-		"127.0.0.1":       true,
-		"::1":             true,
-		"localhost":       true,
-		"0.0.0.0":         true,
-		"192.168.1.1":     true,
-		"admin":           true,
-		"root":            true,
-		"administrator":   true,
+		"127.0.0.1":     true,
+		"::1":           true,
+		"localhost":     true,
+		"0.0.0.0":       true,
+		"192.168.1.1":   true,
+		"admin":         true,
+		"root":          true,
+		"administrator": true,
 	}
 	for _, item := range customAllowlist {
 		clean := strings.ToLower(strings.TrimSpace(item))

@@ -403,10 +403,10 @@ func (handler *Handler) caseReport(response http.ResponseWriter, request *http.R
 				"created_at":     createdAt,
 				"updated_at":     updatedAt,
 			},
-			"alerts":        linkedAlerts,
-			"notes":         caseNotes,
-			"soar_actions":  soarActions,
-			"generated_at":  time.Now().UTC(),
+			"alerts":       linkedAlerts,
+			"notes":        caseNotes,
+			"soar_actions": soarActions,
+			"generated_at": time.Now().UTC(),
 		})
 		return
 	}
@@ -562,4 +562,3 @@ func escapeHTML(s string) string {
 	s = strings.ReplaceAll(s, "'", "&#39;")
 	return s
 }
-

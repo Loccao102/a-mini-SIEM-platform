@@ -70,3 +70,4 @@ VALUES
         true
     )
 ON CONFLICT (name) DO NOTHING;
+

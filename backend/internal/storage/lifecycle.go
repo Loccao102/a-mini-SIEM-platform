@@ -20,7 +20,26 @@ func (e *Elasticsearch) ConfigureLifecycle(ctx context.Context, days int) error 
 	if err := e.putConfig(ctx, "/_ilm/policy/siem-events-retention", policy); err != nil {
 		return err
 	}
-	template := map[string]any{"index_patterns": []string{"siem-events-*"}, "priority": 200, "template": map[string]any{"settings": map[string]any{"index.lifecycle.name": "siem-events-retention", "number_of_shards": 1, "number_of_replicas": 0}, "mappings": map[string]any{"properties": map[string]any{"event_time": map[string]any{"type": "date"}, "message": map[string]any{"type": "text"}, "extra_fields": map[string]any{"type": "object"}}}}}
+	template := map[string]any{
+		"index_patterns": []string{"siem-events-*"},
+		"priority":       200,
+		"template": map[string]any{
+			"settings": map[string]any{
+				"index.lifecycle.name":   "siem-events-retention",
+				"number_of_shards":       1,
+				"number_of_replicas":     0,
+				"index.refresh_interval": "5s",
+				"index.codec":            "best_compression",
+			},
+			"mappings": map[string]any{
+				"properties": map[string]any{
+					"event_time":   map[string]any{"type": "date"},
+					"message":      map[string]any{"type": "text"},
+					"extra_fields": map[string]any{"type": "object"},
+				},
+			},
+		},
+	}
 	if err := e.putConfig(ctx, "/_index_template/siem-events", template); err != nil {
 		return err
 	}

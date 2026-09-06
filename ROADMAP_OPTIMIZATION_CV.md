@@ -77,3 +77,4 @@ Khi nhà tuyển dụng (SOC Manager / Security Lead / Backend Tech Lead) xem CV
    Playbook kích hoạt: Trạng thái chuyển sang `pending_approval`, Analyst nhận thông báo phê duyệt → Bấm Duyệt → Hệ thống đưa IP vào danh sách `blocked_entities`, ghi nhật ký kiểm toán.
 4. **Bước 4 (Đóng Case & Xuất Báo cáo)**:
    Analyst mở Case trên giao diện Web, gắn kết luận `True Positive`, bấm **Export Incident Report** tải về file báo cáo đầy đủ chứng cứ để nộp cho cấp trên / hội đồng chấm điểm.
+

@@ -109,4 +109,3 @@ func TestEscapeHTML(t *testing.T) {
 		t.Fatalf("unexpected escaped output: %s", escaped)
 	}
 }
-
