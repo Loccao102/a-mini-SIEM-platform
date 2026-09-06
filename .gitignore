@@ -16,6 +16,7 @@ frontend/out/
 .DS_Store
 *.exe
 
-# Test artifacts
+# Test artifacts & credentials
 frontend/playwright-report/
 frontend/test-results/
+scripts/.agent-credentials.json

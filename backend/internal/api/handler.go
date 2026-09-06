@@ -370,7 +370,7 @@ func (handler *Handler) fleetAgents(response http.ResponseWriter, request *http.
 	`)
 	rows, err := handler.postgres.Query(request.Context(), `
 		SELECT a.asset_id, a.hostname, a.ip_address::text, a.os_type, a.criticality, a.agent_status,
-		       a.last_seen, a.enrolled_at, a.policy_name, a.policy_version,
+		       a.last_seen, a.enrolled_at, a.policy_name, COALESCE(a.policy_version, 1),
 		       COALESCE(jsonb_object_agg(ls.source_type, ls.status) FILTER (WHERE ls.source_id IS NOT NULL), '{}'::jsonb)
 		FROM assets a LEFT JOIN log_sources ls ON ls.asset_id=a.asset_id
 		GROUP BY a.asset_id ORDER BY a.hostname
