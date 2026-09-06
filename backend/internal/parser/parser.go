@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"net/netip"
 	"regexp"
 	"strings"
 	"sync"
@@ -275,99 +276,13 @@ type GeoIPInfo struct {
 	ReputationScore int    `json:"reputation_score"`
 }
 
+// Without a licensed data source public addresses remain unknown.
 func EnrichIP(ip string) GeoIPInfo {
-	ip = strings.TrimSpace(ip)
-	if ip == "" || ip == "-" {
-		return GeoIPInfo{Country: "Unknown", CountryCode: "UN", ThreatLevel: "info"}
+	addr, err := netip.ParseAddr(strings.TrimSpace(ip))
+	if err == nil && (addr.IsPrivate() || addr.IsLoopback() || addr.IsLinkLocalUnicast()) {
+		return GeoIPInfo{Country: "Internal / LAN", CountryCode: "LAN", ThreatLevel: "unknown"}
 	}
-
-	// Internal/Private LAN IP ranges
-	if strings.HasPrefix(ip, "192.168.") || strings.HasPrefix(ip, "10.") || strings.HasPrefix(ip, "127.") || ip == "::1" || strings.HasPrefix(ip, "172.16.") || strings.HasPrefix(ip, "172.17.") || strings.HasPrefix(ip, "172.18.") || strings.HasPrefix(ip, "172.31.") {
-		if ip == "192.168.1.105" || ip == "192.168.1.120" || ip == "192.168.1.130" {
-			return GeoIPInfo{
-				Country:         "Internal Testbed (Simulated)",
-				CountryCode:     "LAN",
-				City:            "SOC Sandbox",
-				IsMalicious:     true,
-				ThreatLevel:     "high",
-				ThreatCategory:  "Active Attacker Node",
-				ReputationScore: 92,
-			}
-		}
-		return GeoIPInfo{
-			Country:         "Internal / LAN",
-			CountryCode:     "LAN",
-			City:            "Local Network",
-			IsMalicious:     false,
-			ThreatLevel:     "clean",
-			ReputationScore: 0,
-		}
-	}
-
-	// Public IP mappings & Threat Intel lookup signatures
-	if strings.HasPrefix(ip, "185.220.") || strings.HasPrefix(ip, "185.100.") {
-		return GeoIPInfo{
-			Country:         "Germany",
-			CountryCode:     "DE",
-			City:            "Frankfurt",
-			IsMalicious:     true,
-			ThreatLevel:     "critical",
-			ThreatCategory:  "Tor Exit Node / Anonymizer",
-			ReputationScore: 98,
-		}
-	}
-	if strings.HasPrefix(ip, "45.33.") || strings.HasPrefix(ip, "192.0.2.") {
-		return GeoIPInfo{
-			Country:         "United States",
-			CountryCode:     "US",
-			City:            "Dallas",
-			IsMalicious:     true,
-			ThreatLevel:     "high",
-			ThreatCategory:  "Automated Scanner Node",
-			ReputationScore: 88,
-		}
-	}
-	if strings.HasPrefix(ip, "91.240.") || strings.HasPrefix(ip, "198.51.100.") {
-		return GeoIPInfo{
-			Country:         "Russia",
-			CountryCode:     "RU",
-			City:            "Moscow",
-			IsMalicious:     true,
-			ThreatLevel:     "critical",
-			ThreatCategory:  "Known C2 Infrastructure",
-			ReputationScore: 95,
-		}
-	}
-	if strings.HasPrefix(ip, "114.114.") || strings.HasPrefix(ip, "203.0.113.") {
-		return GeoIPInfo{
-			Country:         "China",
-			CountryCode:     "CN",
-			City:            "Beijing",
-			IsMalicious:     true,
-			ThreatLevel:     "high",
-			ThreatCategory:  "Brute Force Botnet Node",
-			ReputationScore: 85,
-		}
-	}
-	if strings.HasPrefix(ip, "118.69.") || strings.HasPrefix(ip, "14.225.") {
-		return GeoIPInfo{
-			Country:         "Vietnam",
-			CountryCode:     "VN",
-			City:            "Ho Chi Minh City",
-			IsMalicious:     false,
-			ThreatLevel:     "clean",
-			ReputationScore: 10,
-		}
-	}
-
-	return GeoIPInfo{
-		Country:         "United States",
-		CountryCode:     "US",
-		City:            "Washington D.C.",
-		IsMalicious:     false,
-		ThreatLevel:     "medium",
-		ReputationScore: 40,
-	}
+	return GeoIPInfo{Country: "Unknown", CountryCode: "UN", ThreatLevel: "unknown"}
 }
 
 type Consumer struct {

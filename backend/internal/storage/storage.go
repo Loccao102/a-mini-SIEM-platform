@@ -31,6 +31,7 @@ func OpenPostgres(ctx context.Context, url string) (*pgxpool.Pool, error) {
 }
 
 type Elasticsearch struct {
+	daily   bool
 	baseURL string
 	client  *http.Client
 }
@@ -58,7 +59,7 @@ func (elastic *Elasticsearch) Search(ctx context.Context, query map[string]any) 
 	if err != nil {
 		return nil, err
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, elastic.baseURL+"/normalized_events/_search", bytes.NewReader(payload))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, elastic.baseURL+"/"+elastic.readIndex()+"/_search?ignore_unavailable=true", bytes.NewReader(payload))
 	if err != nil {
 		return nil, err
 	}
@@ -160,6 +161,13 @@ func (elastic *Elasticsearch) BulkIndexEvents(ctx context.Context, events []any)
 			if eventID, ok := fields["event_id"].(string); ok && eventID != "" {
 				metadata["index"].(map[string]any)["_id"] = eventID
 			}
+		}
+		if elastic.daily {
+			target, err := eventIndex(fields)
+			if err != nil {
+				return err
+			}
+			metadata["index"].(map[string]any)["_index"] = target
 		}
 		metadataJSON, err := json.Marshal(metadata)
 		if err != nil {

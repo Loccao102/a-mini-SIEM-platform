@@ -167,6 +167,9 @@ func provisionIngestKey(t *testing.T) (string, func()) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err = pool.Exec(ctx, "INSERT INTO log_sources(asset_id,source_type,agent_id) VALUES($1,'integration_test','integration-agent') ON CONFLICT(asset_id,source_type) DO UPDATE SET agent_id=EXCLUDED.agent_id", assetID); err != nil {
+		t.Fatal(err)
+	}
 	manager := apikey.New(pool)
 	key, raw, err := manager.GenerateKey(ctx, assetID, nil)
 	if err != nil {
@@ -213,6 +216,7 @@ func TestIngestRejectsMissingInvalidAndRevokedKeys(t *testing.T) {
 func waitForIndexedEvent(t *testing.T, raw string) {
 	t.Helper()
 	elastic := storage.NewElasticsearch(env("INTEGRATION_ELASTICSEARCH_URL", "http://localhost:9200"))
+	elastic.UseDailyIndices()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	for {

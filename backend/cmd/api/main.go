@@ -15,10 +15,12 @@ import (
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/api"
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/apikey"
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/auth"
+	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/correlation"
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/dedup"
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/dlq"
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/health"
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/ingest"
+	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/intel"
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/metrics"
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/parser"
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/ratelimit"
@@ -88,10 +90,27 @@ func main() {
 		log.Fatalf("create rule engine: %v", err)
 	}
 	defer engine.Close()
+	if err := elastic.ConfigureLifecycle(ctx, envInt("EVENT_RETENTION_DAYS", 30)); err != nil {
+		log.Fatalf("retention: %v", err)
+	}
+	var provider intel.Provider
+	if path := os.Getenv("INTEL_FEED_FILE"); path != "" {
+		feed, err := intel.LoadFeed(path)
+		if err != nil {
+			log.Fatalf("intel feed: %v", err)
+		}
+		provider = feed
+	}
+	if endpoint := os.Getenv("INTEL_PROVIDER_URL"); endpoint != "" {
+		provider = intel.HTTPProvider{URL: endpoint, Token: os.Getenv("INTEL_PROVIDER_TOKEN")}
+	}
+	enricher := intel.New(provider)
+	detector := &correlation.Engine{DB: postgres}
 	processEvents := func(ctx context.Context, events []parser.NormalizedEvent) error {
 		started := time.Now()
 		bulk := make([]any, len(events))
 		for index := range events {
+			enricher.Enrich(ctx, &events[index])
 			bulk[index] = events[index]
 		}
 		indexStarted := time.Now()
@@ -102,6 +121,9 @@ func main() {
 		}
 		queueMetrics.RecordESIndexEvent(time.Since(indexStarted), false)
 		for _, event := range events {
+			if err := detector.Process(ctx, event); err != nil {
+				return err
+			}
 			if err := engine.Process(ctx, event); err != nil {
 				queueMetrics.RecordParserEvent(time.Since(started), true)
 				return err
