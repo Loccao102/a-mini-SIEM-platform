@@ -257,3 +257,7 @@ Lý tưởng cho đồ án / dự án mini-SIEM thực tế là:
 - các addon làm sau nhưng theo roadmap rõ ràng và có thứ tự ưu tiên.
 
 ---
+
+## Kế hoạch sau phase 1
+
+Phase 1 đã được đánh dấu hoàn thành; các mục “cần làm” phía trên là baseline lịch sử. Xem [kế hoạch phase 2–4](docs/PHASES_2_4.md) để theo dõi công việc tiếp theo và tiêu chí nghiệm thu.

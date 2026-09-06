@@ -59,8 +59,8 @@ func (handler *Handler) Routes() http.Handler {
 
 	// Ingest endpoint with security middleware: auth + rate limit + size limit
 	ingestSecured := handler.withRequestSizeLimit(MaxPayloadSize)(
-		handler.withRateLimit(
-			handler.withIngestAuth(
+		handler.withIngestAuth(
+			handler.withRateLimit(
 				http.HandlerFunc(handler.ingestLog),
 			),
 		),

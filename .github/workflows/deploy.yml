@@ -14,21 +14,11 @@ env:
   IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}/a-mini-siem-platform
 
 jobs:
-  test-backend:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: backend/go.mod
-          cache: true
-      - run: go test ./...
+  quality:
+    uses: ./.github/workflows/ci.yml
 
   build-and-push:
-    needs: integration
+    needs: quality
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -58,40 +48,14 @@ jobs:
           push: true
           tags: ${{ steps.meta-frontend.outputs.tags }}
 
-  integration:
-    needs: test-backend
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: backend/go.mod
-          cache: true
-      - name: Start integration stack
-        run: docker compose up -d --build postgres redis elasticsearch backend
-      - name: Wait for backend
-        run: |
-          for attempt in $(seq 1 30); do
-            curl --fail http://localhost:8080/healthz && exit 0
-            sleep 2
-          done
-          docker compose logs backend
-          exit 1
-      - name: Run integration tests
-        working-directory: backend
-        env:
-          INTEGRATION_API_URL: http://localhost:8080
-          INTEGRATION_REDIS_URL: redis://localhost:6379/0
-        run: go test -tags=integration ./integration
-      - if: always()
-        run: docker compose down -v
-
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest
-    if: ${{ secrets.VPS_HOST != '' }}
+    env:
+      VPS_HOST: ${{ secrets.VPS_HOST }}
     steps:
       - uses: appleboy/ssh-action@v1.2.2
+        if: env.VPS_HOST != ''
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
