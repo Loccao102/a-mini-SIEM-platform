@@ -1,0 +1,56 @@
+name: Sync Release Branch
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync-clean-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git User
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Checkout or Create Release Branch
+        run: |
+          git checkout -B release
+
+      - name: Remove internal docs, AI prompts, and roadmaps
+        run: |
+          # Remove internal and agent tool directories
+          rm -rf .agents .claude .gemini .gitnexus .impeccable docs
+
+          # Remove planning, roadmap, and agent instruction markdown files
+          rm -f AGENTS.md CLAUDE.md DEPLOYMENT_SCALE_GUIDE.md develop.md
+          rm -f INGEST_SECURITY_IMPLEMENTATION.md PHASE1_PROGRESS.md PHASE2_3_PROGRESS.md
+          rm -f ROADMAP_OPTIMIZATION_CV.md STRUCTURE.md
+          rm -f frontend/AGENTS.md frontend/CLAUDE.md frontend/README.md
+
+          # Replace root README.md with the clean graduation thesis README
+          if [ -f config/RELEASE_README.md ]; then
+            cp config/RELEASE_README.md README.md
+            rm -f config/RELEASE_README.md
+          fi
+
+      - name: Commit and Force Push to release
+        run: |
+          git add -A
+          if git diff --staged --quiet; then
+            echo "No changes to sync to release branch."
+          else
+            git commit -m "chore(release): sync clean source code from main [skip ci]"
+            git push origin release --force
+          fi
