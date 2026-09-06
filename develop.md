@@ -1,263 +1,170 @@
-# SIEM Platform Development Roadmap
+# 🛠️ Cẩm Nang Phát Triển & Lộ Trình Tiến Hóa Hệ Thống (Development & Architecture Evolution)
 
-Bản định hướng và kế hoạch phát triển hệ thống Mini SIEM Platform theo hướng production-ready, nhưng vẫn phù hợp với quy mô đồ án tốt nghiệp / PoC SIEM thực tế.
-
----
-
-## 1. Tình trạng hiện tại của hệ thống
-
-### Core đã có
-
-Hệ thống hiện tại đã hình thành được một stack SIEM cơ bản với các thành phần chính sau:
-
-- `Elastic Agent + Fleet Server`: thu thập log từ nhiều host/service theo policy tập trung.
-- `Logstash`: nhận log từ agent và forward sang backend ingest.
-- `Backend API`: xử lý auth, ingest, asset, rule, alert, analytics, cases.
-- `Redis Stream`: hàng đợi trung gian cho raw log.
-- `Parser`: chuyển raw log thành normalized event.
-- `Elasticsearch`: lưu trữ event và dữ liệu analytics.
-- `PostgreSQL`: lưu asset, rule, alert, user, case, log_sources.
-- `Frontend Next.js`: dashboard tổng quan, alert, rule, events, assets.
-- `Deduplication`: gom nhóm event lặp để giảm noise và tăng hiệu quả điều tra.
-- `Case management`: lifecycle case, notes, timeline, audit trail.
-
-### Dễ thấy: project đã có core SIEM thực chứ chưa chỉ là demo
-
-- Có pipeline log thực từ source -> ingest -> queue -> parser -> ES.
-- Có asset inventory và log_source tracking.
-- Có user roles và auth.
-- Có rule engine và alert management.
-- Có Fleet-style architecture nâng cấp từ Filebeat/Winlogbeat sang Elastic Agent.
-- Có quản lý case và audit cơ bản.
-
-Vì vậy, mục tiêu phát triển không còn là “xây thêm nhiều chức năng mới” mà là làm cho core này ổn định, an toàn và triển khai được như một hệ thống SIEM thật.
+Tài liệu này đóng vai trò là kim chỉ nam kỹ thuật (Technical Blueprint) cho các kỹ sư muốn tham gia phát triển, tùy biến hoặc mở rộng hệ thống **Sentinel (Mini-SIEM & SOAR)** từ quy mô hiện tại (PoC / 20-50 nodes) lên quy mô doanh nghiệp lớn (Enterprise Cloud-Native / Hàng nghìn nodes, hàng triệu EPS).
 
 ---
 
-## 2. Core cần làm ngay: ưu tiên thực tế
+## 1. Triết Lý Thiết Kế (Design Philosophy)
 
-### 2.1. Bảo mật core pipeline
-
-- **Cần làm**: API key / mTLS / allowlist cho ingest endpoint.
-- **Cần làm**: rate limiting, request size limit, TLS cho agent.
-- **Cần làm**: xác thực agent theo host, agent_id, source_type.
-- **Vì sao**: hiện `POST /api/v1/ingest` vẫn là public local-demo style, chưa an toàn cho môi trường multi-client.
-
-### 2.2. Tăng độ tin cậy dữ liệu
-
-- **Cần làm**: dead-letter queue cho parser / ingest thất bại.
-- **Cần làm**: retry backoff và idempotency.
-- **Cần làm**: replay tool / reprocessing tool.
-- **Cần làm**: soft-delete hoặc retention policy cho raw logs.
-- **Vì sao**: SIEM phải chịu được loss/delay, không được mất evidence khi consumer lỗi.
-
-### 2.3. Quan sát hệ thống
-
-- **Cần làm**: metrics cho queue lag, parser lag, ingest latency, ES indexing latency.
-- **Cần làm**: health/readiness riêng cho từng service.
-- **Cần làm**: structured logging + trace ID.
-- **Cần làm**: alert cho pipeline health (redis đầy, parser chậm, ES lỗi).
-- **Vì sao**: system là pipeline phân tán, nếu không quan sát thì không biết đâu là điểm nghẽn.
-
-### 2.4. Fleet/Agent management hơn thực tế
-
-- **Cần làm**: policy template rõ ràng cho Linux, Windows, Docker, app logs.
-- **Cần làm**: auto-enrollment validation và tag mapping.
-- **Cần làm**: check host status / last_seen / unhealthy agent.
-- **Cần làm**: policy versioning và deploy lịch sử.
-- **Vì sao**: hiện Fleet đã có cấu hình và endpoint đồng bộ asset, nhưng chưa hoàn chỉnh như môi trường thực tế.
-
-### 2.5. Dữ liệu và retention
-
-- **Cần làm**: ILM / retention policy cho Elasticsearch.
-- **Cần làm**: backup/restore cho PostgreSQL.
-- **Cần làm**: log archival và compliance rule.
-- **Vì sao**: SIEM phải có cơ chế lưu giữ sự kiện theo thời hạn và tuân thủ.
-
-### 2.6. Kiểm thử và CI
-
-- **Cần làm**: integration test cho ingest + redis + parser + elasticsearch.
-- **Cần làm**: test cho Fleet enrollment và asset synchronization.
-- **Cần làm**: E2E test cho login, events, alerts, cases.
-- **Cần làm**: CI quality gate cho backend/frontend.
-- **Vì sao**: hệ thống đang có nhiều thành phần phụ thuộc lẫn nhau, cần automation để giảm bug.
+Hệ thống Sentinel được thiết kế theo phương châm:
+1. **Fit-for-Purpose (Tối ưu cho mục tiêu hiện tại)**: Vận hành trơn tru toàn bộ pipeline SIEM + SOAR trên máy trạm cấu hình tối thiểu (<1GB RAM, 0 đồng chi phí bản quyền/hạ tầng).
+2. **Modular Decoupling (Tháo lắp linh hoạt)**: Áp dụng kiến trúc Clean Architecture & Event-Driven. Mỗi tầng (Ingest, Queue, Parser, Correlation, Storage, SOAR) đều được phân tách ranh giới rõ ràng thông qua Go Interfaces và REST/Streaming contracts.
+3. **Pluggable Architecture**: Khi tải hệ thống vượt ngưỡng, bất kỳ thành phần nào cũng có thể được "rút phích cắm" và thay thế bằng giải pháp Big Data chuyên dụng mà **không phải đập đi xây lại toàn bộ codebase**.
 
 ---
 
-## 3. Hướng phát triển addon mạnh nhất
+## 2. Ma Trận Thay Thế & Nâng Cấp Module (Component Evolution Matrix)
 
-### 3.1. Threat Intelligence & GeoIP
+Bảng tổng quan so sánh công nghệ hiện tại và phương án nâng cấp khi hệ thống scale lớn:
 
-**Mục tiêu**: làm giàu sự kiện bằng thông tin đen/đỏ, tăng accuracy cảnh báo.
-
-- GeoIP lookup cho `src_ip`.
-- Detect malicious IP từ AbuseIPDB / VirusTotal / Tor / C2 feed.
-- Tự động nâng severity khi IP độc hại.
-- Gắn tag `reputation_score`, `is_malicious`, `country`, `city`.
-- Cache kết quả để hạn chế rate limit.
-
-**Ưu tiên**: High
-**Lý do**: tăng giá trị cảnh báo và giúp SOC thao tác nhanh hơn.
-
-### 3.2. SOAR / Automated Response
-
-**Mục tiêu**: không chỉ phát hiện, mà còn phản ứng tự động.
-
-- Block IP bằng firewall / WAF / cloud API.
-- Disable account khi có activity đổi đặc quyền bất thường.
-- Runbook / playbook cho từng loại alert.
-- Approval gate cho hành động nguy hiểm.
-- Audit log cho mỗi action đã thực thi.
-
-**Ưu tiên**: Medium-High
-**Lý do**: rất hấp dẫn nhưng chỉ nên làm sau khi core pipeline và alerting đã ổn.
-
-### 3.3. Correlation / Attack Chain
-
-**Mục tiêu**: phát hiện chuỗi tấn công thay vì phát hiện đơn lẻ.
-
-- `SSH Brute Force` -> `SSH Login Success` -> `Privilege Escalation`
-- Mở rộng từ rule đơn lẻ sang multi-event correlation.
-- Dùng state machine hoặc time-window correlation.
-- Tổng hợp alert theo incident chain.
-
-**Ưu tiên**: High
-**Lý do**: đây là bước tiến từ SIEM cơ bản lên SOC full-scale.
-
-### 3.4. Case Management nâng cao
-
-**Mục tiêu**: chuyển alert thành workflow điều tra thực tế.
-
-- Gắn alert -> case.
-- Assign analyst.
-- Timeline notes, evidence, status, resolution.
-- Đánh dấu `False Positive`, `True Positive`, `Resolved`.
-- Export report / PDF / CSV.
-
-**Ưu tiên**: Medium
-**Lý do**: core case management đã có, cần làm đi sâu để dùng hiệu quả.
-
-### 3.5. Advanced Analytics & Visualization
-
-**Mục tiêu**: báo cáo và drill-down tốt hơn.
-
-- Trend chart theo thời gian.
-- Top attacking IP / user / source type.
-- Geo map.
-- Facets và drill-down trên dashboard.
-- Tự động report theo ngày / tuần.
-
-**Ưu tiên**: Medium
-**Lý do**: đã có nền analytics cơ bản, cần nâng cấp trải nghiệm observability.
+| Phân hệ (Subsystem) | Hiện tại (Minimal / PoC) | Phương án Nâng cấp (Enterprise Scale) | Khi nào cần thay thế? |
+| :--- | :--- | :--- | :--- |
+| **Hàng đợi đệm (Message Queue)** | **Redis Streams** | **Apache Kafka** hoặc **Redpanda** | Tải $> 50,000 \text{ EPS}$, cần lưu log trên đĩa nhiều ngày để replay |
+| **Điều phối (Orchestration)** | **Docker Compose** | **Kubernetes (K8s / K3s) + KEDA** | Cần Auto-scaling tự động 100%, Multi-node cluster, High Availability |
+| **Kho lưu trữ log (Datastore)** | **Elasticsearch 8** | **ClickHouse** hoặc **OpenSearch** | Log $> 10 \text{ triệu/ngày}$, muốn giảm 80% dung lượng đĩa và RAM |
+| **Phân tích luồng (Stream Engine)** | **Go In-Memory Rules** | **Apache Flink** / **Vector / Benthos** | Cần Complex Event Processing (CEP) trên sliding windows phân tán |
+| **Định danh & Truy cập (IAM)** | **Local JWT + Postgres** | **Keycloak / Authentik (OIDC/SAML)** | Cần SSO doanh nghiệp (Google Workspace, Active Directory, Azure AD) |
+| **Giao thức Ingestion (Transport)** | **HTTP REST / JSON** | **gRPC / Protocol Buffers** hoặc **OTel** | Muốn giảm 60% băng thông mạng và chi phí đóng/mở kết nối TLS |
+| **Threat Intelligence (CTI)** | **Local JSON Feed + Cache**| **MISP / OpenCTI (STIX/TAXII)** | Tự động đồng bộ CTI feeds toàn cầu từ các cơ quan an ninh mạng |
 
 ---
 
-## 4. Ưu tiên phát triển theo thời gian
+## 3. Phân Tích Kỹ Thuật Chi Tiết Các Hướng Thay Thế
 
-### Giai đoạn 1: Core stabilization (0-2 tuần)
+### 🔄 3.1. Hàng đợi đệm: `Redis Streams` $\longrightarrow$ `Apache Kafka` / `Redpanda`
 
-- Bảo mật ingest
-- Rate limit + auth
-- Queue health + dead-letter
-- Pipeline observability
-- Validation cho Fleet enrollment
-- Dữ liệu đầu vào được xác thực và có baseline retention
+* **Hiện tại**: `siem:raw-logs` dùng Redis Streams với `XADD ... MAXLEN ~ 50000`.
+  * *Ưu điểm*: Chiếm $<30\text{MB}$ RAM, độ trễ $<1\text{ms}$, hỗ trợ Consumer Groups chia việc cho nhiều parser workers.
+  * *Hạn chế*: Lưu trên RAM nên giới hạn dung lượng đệm nếu parser bị nghẽn trong thời gian dài.
+* **Kế hoạch chuyển đổi**:
+  * Tách module queue trong Go: Định nghĩa interface `QueueProducer` và `QueueConsumer`.
+  * Sử dụng thư viện `segmentio/kafka-go` để triển khai adapter Kafka/Redpanda.
+  * *Khuyến nghị công nghệ*: Ưu tiên dùng **Redpanda** thay vì Apache Kafka truyền thống. Redpanda viết bằng C++, tương thích 100% Kafka API nhưng không cần chạy JVM/Zookeeper, tiết kiệm RAM gấp 3 lần và khởi động chỉ mất 2 giây.
 
-**Mục tiêu**: hệ thống đạt mức “chạy được thực tế” cho môi trường pilot / lab production, không phải chỉ là demo. Khi core này ổn, mới mở rộng thêm tính năng nâng cao.
+```go
+// Ví dụ Interface trừu tượng hóa Queue:
+type QueueProducer interface {
+    Publish(ctx context.Context, topic string, payload []byte) error
+}
 
-**Tiêu chí để coi là đã đạt level chạy thực tế**
-
-Hệ thống chỉ được xem là “đủ mức chạy thực tế” khi thỏa mãn đủ các điều kiện sau:
-
-- Agent/host có thể enroll và hoạt động với Fleet mà không cần xử lý thủ công từng lần.
-- Ingest endpoint yêu cầu auth hợp lệ; có giới hạn tần suất và kiểm soát kích thước payload.
-- Dữ liệu từ ít nhất 2-3 source khác nhau (ví dụ: Linux, Windows, app logs) có thể vào pipeline mà không lỗi định kỳ.
-- Queue không bị đầy do consumer lỗi; có dead-letter và replay tool khi parser/ingest thất bại.
-- Có health check riêng cho từng service: ingest, parser, redis, elasticsearch, fleet-server.
-- Có metrics cơ bản về ingest latency, queue lag, parser lag, ES indexing latency.
-- Có alert khi pipeline chậm hoặc mất dữ liệu.
-- Có cơ chế ghi log theo cấu trúc và trace ID để debug dễ hơn.
-- Các event đã được normalize đủ để dashboard và rule engine hoạt động với dữ liệu đáng tin cậy.
-- Hệ thống có thể chạy liên tục trong ít nhất 24-72 giờ mà không phải restart thủ công.
-
-**Không nên coi là “đã đạt chuẩn” nếu**
-
-- Vẫn đang cắm data bằng cách gọi API bằng curl thủ công mà không có auth/ACL.
-- Pipeline còn phụ thuộc heavy vào manual recovery khi parser hoặc redis lỗi.
-- Chưa có check health và monitoring cơ bản.
-- Fleet enrollment chưa được validate qua nhiều host/service.
-- Chưa có dead-letter/retry hoặc bắt lỗi rõ ràng.
-
-> Nói ngắn gọn: “đạt level chạy thực tế” là lúc hệ thống có thể nhận, xử lý, giám sát và phục hồi dữ liệu đáng tin cậy trong môi trường pilot, chứ chưa phải lúc đáp ứng toàn bộ tất cả yêu cầu SOC/Soar/Threat Intel nâng cao.
-
-### Giai đoạn 2: Operational hardening (2-4 tuần)
-
-- ILM retention
-- Retry / replay / idempotency
-- Alert dedup tốt hơn
-- Search + filter nâng cao
-- KPI dashboard cho pipeline
-
-**Mục tiêu**: hệ thống dễ vận hành trong môi trường nhiều host.
-
-### Giai đoạn 3: Detection enhancement (4-8 tuần)
-
-- Threat Intel & GeoIP
-- Correlation chain
-- IOC extraction
-- Alert enrichment
-
-**Mục tiêu**: chuyển từ dữ liệu raw sang tri thức an ninh.
-
-### Giai đoạn 4: SOAR + SOC workflow (8-12 tuần)
-
-- Playbook engine
-- Auto-response
-- Case workflow nâng cao
-- Report automation
-- Analyst action audit
-
-**Mục tiêu**: hệ thống bắt đầu có tính tự động hóa như SOAR thực thụ.
+type QueueConsumer interface {
+    Subscribe(ctx context.Context, topic string, group string, handler func(msg []byte) error) error
+}
+```
 
 ---
 
-## 5. Khuyến nghị triển khai hợp lý cho đồ án / mini-SIEM
+### 🔄 3.2. Điều phối hạ tầng: `Docker Compose` $\longrightarrow$ `Kubernetes` + `KEDA`
 
-### Nên ưu tiên theo thứ tự sau:
-
-1. Core hardening
-2. Fleet policy maturity
-3. Dedup + filter + search
-4. Threat intel
-5. Attack chain correlation
-6. SOAR playbooks
-7. Dashboard và report nâng cao
-
-### Không nên làm thẳng addon SOAR trước khi core ổn
-
-SOAR rất mạnh nhưng nếu pipeline log chưa chắc chắn, các playbook sẽ làm tăng rủi ro và việc triển khai sẽ không đáng tin. Nếu hệ thống core không ổn, dữ liệu đầu vào sẽ thiếu tin cậy.
-
----
-
-## 6. Kết luận
-
-Hệ thống hiện tại đã có một lớp nền SIEM đầy đủ: collect, normalize, analyze, alert, case, dashboard, asset management, Fleet-based agent architecture. Đây là nền tảng tốt để phát triển lên mức enterprise.
-
-Nhưng điểm cần tập trung không phải là “thêm nhiều addon” ngay, mà là:
-
-- ổn định core,
-- tăng bảo mật,
-- tăng độ tin cậy,
-- tăng khả năng vận hành,
-- rồi mới triển khai các addon như Threat Intel, Correlation, SOAR.
-
-Lý tưởng cho đồ án / dự án mini-SIEM thực tế là:
-
-- core SIEM phải chạy ổn định trước,
-- các addon làm sau nhưng theo roadmap rõ ràng và có thứ tự ưu tiên.
+* **Hiện tại**: File [docker-compose.yml](file:///c:/Users/Admin/a-mini-SIEM-platform/docker-compose.yml) và [docker-compose.scale.yml](file:///c:/Users/Admin/a-mini-SIEM-platform/docker-compose.scale.yml) cho phép scale thủ công `docker compose ... up -d --scale backend=3`.
+* **Kế hoạch chuyển đổi lên Cloud-Native K8s**:
+  1. **Deployments**:
+     - `siem-backend`: Stateless Deployment chạy nhiều Replicas.
+     - `siem-frontend`: Next.js SSR Deployment.
+     - `siem-gateway`: Ingress Nginx Controller có cert-manager tự cấp chứng chỉ HTTPS.
+  2. **Event-Driven Auto-Scaling (KEDA)**:
+     - Cài đặt KEDA trên cụm Kubernetes.
+     - Cấu hình `ScaledObject` theo dõi Redis Stream lag (hoặc Kafka consumer lag):
+       - Khi hàng đợi pending logs $> 2,000$: KEDA tự động tăng backend pods từ 2 lên 10 pods.
+       - Khi hàng đợi về 0: KEDA tự thu hồi về 2 pods để tiết kiệm tài nguyên cloud.
+  3. **Khuyến nghị môi trường tối thiểu**: Bắt đầu bằng **K3s** (Lightweight Kubernetes do Rancher phát triển) chỉ tốn ~512MB RAM cho Control Plane.
 
 ---
 
-## Kế hoạch sau phase 1
+### 🔄 3.3. Kho lưu trữ Log: `Elasticsearch` $\longrightarrow$ `ClickHouse`
 
-Phase 1 đã được đánh dấu hoàn thành; các mục “cần làm” phía trên là baseline lịch sử. Xem [kế hoạch phase 2–4](docs/PHASES_2_4.md) để theo dõi công việc tiếp theo và tiêu chí nghiệm thu.
+* **Hiện tại**: Elasticsearch 8 lưu trữ index theo ngày `siem-events-YYYY.MM.DD` với ILM Retention.
+  * *Hạn chế*: Elasticsearch dựa trên JVM và Inverted Index, tốn khá nhiều RAM (~700MB - 1GB) và đĩa phình to khi log lớn.
+* **Kế hoạch chuyển đổi sang ClickHouse**:
+  * ClickHouse là DBMS dạng cột (Columnar Database) nhanh nhất thế giới hiện nay cho việc ghi nhận và truy vấn logs thời gian thực.
+  * *Tỷ lệ nén*: Tỷ lệ nén dữ liệu từ $5:1$ đến $10:1$ (100GB raw log chỉ tốn 10-15GB SSD).
+  * *Tốc độ truy vấn*: Nhanh gấp 10-50 lần Elasticsearch đối với các truy vấn tổng hợp SOC (Top 10 IP tấn công, lượng log theo giờ, thống kê brute-force).
+  * *Cơ chế triển khai*: Tạo bảng với engine `MergeTree` hoặc `ReplacingMergeTree` phân vùng theo ngày (`PARTITION BY toYYYYMMDD(timestamp)`).
+
+---
+
+### 🔄 3.4. Giao thức thu thập: `HTTP REST/JSON` $\longrightarrow$ `gRPC / Protobuf` & `OpenTelemetry`
+
+* **Hiện tại**: Agent gửi log qua HTTP POST `/api/v1/ingest` định dạng JSON.
+* **Kế hoạch chuyển đổi**:
+  1. **gRPC Streaming**:
+     - Định nghĩa file `siem.proto` cho thông điệp log.
+     - Giảm kích thước payload đến **60%** so với chuỗi JSON thô.
+     - Duy trì kết nối HTTP/2 persistent connection, loại bỏ chi phí handshake TCP/TLS cho mỗi batch log.
+  2. **OpenTelemetry (OTel) Collector**:
+     - Tích hợp endpoint nhận dữ liệu chuẩn OTLP (OpenTelemetry Protocol).
+     - Cho phép nhận log trực tiếp từ Kubernetes DaemonSets, Fluent Bit, AWS CloudWatch, hoặc Azure Monitor mà không cần viết custom agent.
+
+---
+
+## 4. Hướng Dẫn Thiết Lập Môi Trường Phát Triển Cục Bộ (Local Dev Setup)
+
+Dành cho nhà phát triển muốn chạy debug trực tiếp mã nguồn trên máy:
+
+### 4.1. Khởi động các dịch vụ phụ trợ (Dependencies only)
+Thay vì chạy toàn bộ stack bằng Docker, chỉ khởi động các database và queue:
+```bash
+docker compose up -d postgres redis elasticsearch
+```
+
+### 4.2. Chạy Backend Go (Hot-reload / Debug)
+```bash
+cd backend
+
+# Tải dependencies
+go mod download
+
+# Chạy trực tiếp Backend API Server
+go run ./cmd/api/main.go
+
+# Chạy Ingest & Parser Worker (nếu chạy phân tán)
+go run ./cmd/ingest/main.go
+go run ./cmd/parser/main.go
+```
+
+### 4.3. Chạy Frontend Next.js
+```bash
+cd frontend
+
+# Cài đặt dependencies
+npm install
+
+# Chạy server phát triển Next.js với Turbopack
+npm run dev
+# Mở trình duyệt tại http://localhost:3000
+```
+
+---
+
+## 5. Quy Chuẩn Kiểm Thử & Đóng Góp Mã Nguồn (Testing & Quality Gates)
+
+Trước khi commit bất kỳ tính năng hoặc refactor nào, mã nguồn **bắt buộc** phải vượt qua bộ kiểm chuẩn sau:
+
+```bash
+# 1. Kiểm tra tĩnh Backend Go
+cd backend
+go vet ./...
+
+# 2. Chạy toàn bộ Unit Tests & Data Race Detector
+go test -race -count=1 ./...
+
+# 3. Chạy Integration Tests xác thực pipeline thực tế (yêu cầu Docker)
+go test -v -tags=integration ./integration
+
+# 4. Kiểm tra Lint & Type Check Frontend
+cd ../frontend
+npm run lint
+npx tsc --noEmit
+
+# 5. Build kiểm tra Production Frontend
+npm run build
+```
+
+---
+
+## 6. Lộ Trình Tính Năng Tương Lai (Roadmap Milestones)
+
+- [ ] **v1.1 (Detection as Code)**: Hỗ trợ import/export Sigma Rules trực tiếp (Sigma format $\rightarrow$ Go regex rule).
+- [ ] **v1.2 (Multi-Tenancy)**: Tách biệt dữ liệu log và alert giữa các chi nhánh / khách hàng (Mỗi Tenant một không gian lưu trữ và dashboard riêng).
+- [ ] **v1.3 (eBPF Agent)**: Bổ sung agent giám sát nhân Linux bằng eBPF (BumbleBee / Cilium Tetragon) để phát hiện mã độc rootkit ngay tại tầng kernel.
+- [ ] **v1.4 (AI SOC Copilot)**: Tích hợp mô hình ngôn ngữ lớn cục bộ (Ollama / Llama-3) để tự động tóm tắt chuỗi sự kiện điều tra và đề xuất bước khắc phục sự cố.

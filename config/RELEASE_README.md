@@ -125,3 +125,4 @@ powershell -ExecutionPolicy Bypass -File .\scripts\sentinel-windows-agent.ps1
 ```
 * Kiểm tra danh sách Agent trực tiếp tại [http://localhost:3000/assets](http://localhost:3000/assets).
 * Tìm kiếm log thời gian thực tại [http://localhost:3000/events](http://localhost:3000/events).
+

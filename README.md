@@ -1,482 +1,171 @@
 # Sentinel | Mini-SIEM & SOAR Cyber Defense Platform
 
-Nền tảng Giám sát An ninh (SIEM) và Phản ứng Tự động (SOAR) mã nguồn mở, tối ưu chi phí **0 đồng** (<2GB RAM), sẵn sàng thu thập và phân tích tương quan cho **20+ máy trạm (>200,000 logs/ngày)**.
-
-```text
-[ 20+ Endpoints ] -> [ Nginx Gateway ] -> [ Go Ingest Replicas ] -> [ Redis Streams (50k cap) ]
-                                                                           │
-                                              ┌────────────────────────────┴────────────────────────────┐
-                                              ▼                                                         ▼
-                                   [ Elasticsearch 8.x ]                                    [ Threat Correlation Engine ]
-                               (Daily ILM + Best Compression)                              (MITRE T1110, T1078, T1548.003)
-                                                                                                        │
-                                                                                                        ▼
-                                                                                             [ SOAR Playbook Engine ]
-                                                                                          (Approval Gate & Rollback TTL)
-                                                                                                        │
-                                                                                                        ▼
-                                                                                             [ Cases & Incident Report ]
-                                                                                               (Printable SOC PDF / In)
-```
-
-### ⚡ 1-Click Demo Tấn Công & Phòng Thủ Thực Chiến:
-Chỉ với 1 câu lệnh, kịch bản tự động mô phỏng chuỗi tấn công APT (Brute Force SSH $\rightarrow$ Đăng nhập $\rightarrow$ Leo thang đặc quyền), kích hoạt Correlation Engine và gọi SOAR Playbook:
-```bash
-python scripts/simulate-attack-chain.py
-# Hoặc trên Linux/Mac: ./scripts/simulate-attack.sh
-```
-Sau đó mở trình duyệt tại:
-- **SOAR Approval Console**: [http://localhost:3000/soar](http://localhost:3000/soar) $\rightarrow$ Bấm *"✓ Phê duyệt Chặn"* để cô lập IP tấn công.
-- **Incident Report**: [http://localhost:3000/cases](http://localhost:3000/cases) $\rightarrow$ Bấm *"📄 Xuất Báo Cáo Incident"* để xuất file PDF điều tra chuẩn SOC.
+Nền tảng Giám sát An ninh Thông tin (**SIEM**) kết hợp Phản ứng Sự cố Tự động (**SOAR**) dạng micro-architecture hiệu năng cao, tối ưu chi phí **0 đồng** (< 1GB RAM), sẵn sàng thu thập và phân tích tương quan chuỗi tấn công đa tầng cho **20+ máy trạm (>200,000 logs/ngày)**.
 
 ---
 
-## Kiến trúc & Điểm Nổi Bật
+## 🏛️ Kiến Trúc Hệ Thống (System Architecture)
 
-Elastic Agent thay thế Filebeat/Winlogbeat để quản lý thu thập log từ nhiều service/host theo một policy tập trung, hỗ trợ tốt hơn cho môi trường đa máy chủ, đa dịch vụ và dễ mở rộng ở giai đoạn sau. Đây là mô hình Fleet thật, không phải mock: Fleet Server luôn chạy cùng stack, agent enroll trực tiếp vào `fleet-server` trên cổng `8220`, và backend đồng bộ asset + `log_sources` theo hostname để nhiều client đều có thể gửi log lên cùng một server mà không cần khai báo thủ công từng host.
+```mermaid
+flowchart TD
+    subgraph Clients["Tầng Thu Thập & Đầu Cuối (Log Shippers)"]
+        A1["Windows Agent (PowerShell Native)"]
+        A2["Linux Nodes (Rsyslog / Syslog)"]
+        A3["Multi-host Log Shippers (Vector / Python Daemon)"]
+        A4["Attack Simulation Scripts (APT Scenarios)"]
+    end
 
-Dashboard đọc dữ liệu thật từ API Go. Overview, Alerts, SOAR và Log Explorer tự động đồng bộ thời gian thực.
+    subgraph EntryLayer["Tầng Cổng Phân Tải (Gateway / Ingestion)"]
+        LB["Nginx Load Balancer (:8080 / :80)<br/>Least-Connections & Keep-Alive"]
+        API["Sentinel Go API Replicas<br/>Zero-Trust Auth · SHA-256 API Keys"]
+    end
 
-## Yêu cầu Hệ thống
+    subgraph BufferLayer["Hàng Đợi Đệm (In-Memory Buffer)"]
+        RStream[("Redis Streams<br/>siem:raw-logs · Capped 50k Buffer")]
+    end
 
-- Docker Desktop đang chạy (hoặc Docker Engine trên Linux)
-- Docker Compose v2
-- RAM tối thiểu: 3GB - 4GB (toàn bộ stack chạy mượt chỉ tốn ~1.9GB RAM)
-- Các port `3000`, `5432`, `6379`, `8080`, `9200`, `5044`, `8220` chưa bị chiếm
+    subgraph CoreEngine["Động Cơ Xử Lý & Phát Hiện (Processing Engine)"]
+        Parser["Log Normalizer & Parser<br/>CEF/ECS · MITRE ATT&CK Tagging"]
+        Correl["Correlation Engine<br/>Multi-Stage Attack Chains (T1110 -> T1078 -> T1548)"]
+        RuleEng["Rule Engine & Alerting<br/>Atomic Deduplication · pg_advisory_xact_lock"]
+    end
+
+    subgraph Storage["Tầng Lưu Trữ (Storage Layer)"]
+        ES[("Elasticsearch 8<br/>Daily Indices siem-events-* · ILM Retention")]
+        PG[("PostgreSQL 17<br/>Assets, Rules, Findings, SOAR & Cases")]
+    end
+
+    subgraph SOARLayer["Phản Ứng Tự Động (SOAR Playbook Engine)"]
+        SOAREng["SOAR Engine<br/>Human-in-the-Loop Approval · Auto-TTL Rollback"]
+    end
+
+    subgraph WebUI["Giao Diện SOC (SOC Web Console)"]
+        NextUI["Next.js 16 / React 19 UI (:3000)<br/>Live Telemetry · Cases · SOAR · PDF Reports"]
+    end
+
+    A1 -->|POST /api/v1/ingest| LB
+    A2 -->|POST /api/v1/ingest| LB
+    A3 -->|POST /api/v1/ingest| LB
+    A4 -->|POST /api/v1/ingest| LB
+
+    LB --> API
+    API -->|XADD| RStream
+    RStream -->|XREADGROUP Consumer Group| Parser
+    Parser -->|Bulk Index| ES
+    Parser --> Correl
+    Parser --> RuleEng
+    Correl -->|Detection Findings| PG
+    RuleEng -->|Durable Alerts| PG
+    PG --> SOAREng
+    NextUI -->|REST API| API
+```
+
+---
+
+## 🚀 Công Nghệ Sử Dụng (Tech Stack)
+
+* **Backend Core**: Golang 1.26 (Native Concurrency, Goroutines, Channels, Zero HTTP external framework).
+* **Frontend Web**: Next.js 16 (App Router), React 19, Tailwind CSS v4, Lucide Icons, Canvas Telemetry.
+* **Message Queue**: Redis 7 (Redis Streams, Consumer Groups, Memory Cap, Zero Message Loss).
+* **Log Storage**: Elasticsearch 8 (Daily Index Partitioning, Best Compression, ILM Retention).
+* **Relational Datastore**: PostgreSQL 17 (Advisory Locks, Atomic Receipts, RBAC, SOAR State).
+* **Load Balancer**: Nginx Alpine (Reverse Proxy, Round-Robin & Least-Connections load balancing).
+* **Containerization**: Docker Compose (Toàn bộ cụm chạy mượt mà dưới **< 850MB RAM**).
+
+---
+
+## ⚡ Hướng Dẫn Cài Đặt & Khởi Chạy (Quickstart)
+
+### 1. Yêu cầu hệ thống
+* Đã cài đặt **Docker** và **Docker Compose v2**.
+* RAM tối thiểu: **2 GB** (Khuyến nghị 4 GB).
+* Hệ điều hành: Windows, Linux hoặc macOS.
+
+### 2. Khởi động toàn bộ hệ thống
+Mở terminal tại thư mục dự án và chạy:
+```bash
+docker compose up -d
+```
+
+Sau khoảng 20-30 giây, kiểm tra trạng thái hoạt động:
+```bash
+curl http://localhost:8080/healthz
+```
+*Hệ thống trả về HTTP 200 `{"status":"healthy"}` cho toàn bộ các phân hệ phụ trợ (Elasticsearch, PostgreSQL, Redis Streams, Parser, Ingest, Disk).*
+
+### 3. Đăng nhập SOC Dashboard
+* **Địa chỉ Web UI**: [http://localhost:3000](http://localhost:3000)
+* **Tài khoản SOC Admin mặc định**:
+  * Email: `admin@example.com`
+  * Mật khẩu: `admin`
+* **Tài khoản SOC Analyst**:
+  * Email: `analyst@example.com`
+  * Mật khẩu: `analyst`
+
+---
+
+## 🛡️ Kịch Bản Mô Phỏng Tấn Công & SOAR Thực Chiến (1-Click Demo)
+
+Hệ thống tích hợp sẵn kịch bản mô phỏng chuỗi tấn công APT đa tầng (MITRE ATT&CK: **T1110** Brute Force SSH $\rightarrow$ **T1078** Valid Account $\rightarrow$ **T1548.003** Sudo Privilege Escalation):
+
+### Trên Windows (PowerShell):
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\simulate-attack.ps1
+```
+
+### Trên Linux / macOS:
+```bash
+chmod +x ./scripts/simulate-attack.sh
+./scripts/simulate-attack.sh
+```
+
+### Quy trình điều tra & phản ứng sau khi chạy kịch bản:
+1. **Correlation Engine**: Phát hiện chuỗi 3 hành vi liên tiếp trong cửa sổ 10 phút, kích hoạt Critical Alert và ghi nhận Finding.
+2. **SOAR Playbook**: Nhận diện IP tấn công `198.51.100.42` và tài khoản `ubuntu`, tự động tạo yêu cầu hành động `block_ip` và `isolate_user`.
+3. **Phê duyệt Human-in-the-Loop**: Mở [http://localhost:3000/soar](http://localhost:3000/soar), bấm **"Phê duyệt Chặn"** để cô lập kẻ tấn công.
+4. **Auto-TTL Rollback**: IP tấn công bị đưa vào danh sách chặn kèm thời hạn giải tỏa tự động (TTL) 1 giờ.
+5. **Xuất Báo Cáo Sự Cố (SOC Report)**: Mở [http://localhost:3000/cases](http://localhost:3000/cases), chọn Case tương ứng và bấm **"📄 Xuất Báo Cáo Incident (PDF / In)"** để in ra báo cáo điều tra chuẩn mực.
+
+---
+
+## 💻 Biến Máy Tính Cá Nhân Thành Log Shipper Thực Tế
+
+Hệ thống cung cấp script đại lý native cho Windows để đẩy trực tiếp các sự kiện đăng nhập và bảo mật thực tế của máy tính lên SIEM:
 
 ```powershell
-docker --version
-docker compose version
+powershell -ExecutionPolicy Bypass -File .\scripts\sentinel-windows-agent.ps1
 ```
+* Tự động đăng nhập Admin $\rightarrow$ Enrolled Agent $\rightarrow$ Cấp phát SHA-256 API Key.
+* Thu thập sự kiện Windows Security (`EventCode 4624, 4672, 4625`).
+* Kiểm tra danh sách Agent trực tiếp tại [http://localhost:3000/assets](http://localhost:3000/assets).
+* Tìm kiếm log thời gian thực tại [http://localhost:3000/events](http://localhost:3000/events).
 
-Go va Node.js khong can cai neu chi chay bang Docker.
+---
 
-## Khoi dong local tu dau
+## 📈 Hướng Dẫn Scale Ngang & Sizing Hệ Thống
 
-Mo PowerShell tai thu muc repository:
-
-```powershell
-Copy-Item .env.example .env
-```
-
-Mo `.env` va doi it nhat:
-
-```dotenv
-JWT_SECRET=mot_chuoi_bi_mat_dai_va_ngau_nhien
-ADMIN_PASSWORD=mat_khau_admin_toi_thieu_8_ky_tu
-# Chi bat du lieu demo khi can chay moi truong demo
-MODE=production
-```
-
-`ADMIN_PASSWORD` chi duoc dung de tao admin lan dau. Neu PostgreSQL volume da ton tai, doi bien nay khong doi password cu.
-Du lieu demo (tai khoan mau, assets mau va cac nut/kich ban demo tren UI) chi duoc bat khi dat `MODE=develop`.
-
-De xoa toan bo du lieu local va khoi dong lai tu trang thai rong:
-
-```powershell
-docker compose down -v
-docker compose up -d --build
-```
-
-Khoi dong:
-
-```powershell
-docker compose up -d --build
-docker compose ps
-```
-
-Cho `postgres`, `redis`, `elasticsearch` va `backend` co trang thai `healthy`. Frontend khong co healthcheck rieng.
-
-Kiem tra API va dashboard:
-
-```powershell
-Invoke-RestMethod http://localhost:8080/healthz
-Start-Process http://localhost:3000
-```
-
-Ket qua health mong doi la `status: ok`.
-
-Health chi tiet va metrics cho monitoring:
-
-```powershell
-Invoke-RestMethod http://localhost:8080/healthz/redis
-Invoke-RestMethod http://localhost:8080/healthz/queue
-Invoke-RestMethod http://localhost:8080/healthz/elasticsearch
-Invoke-RestMethod http://localhost:8080/metrics
-```
-
-Retry queue dat 100 message hoac DLQ dat 10 message se tao pipeline alert va tra HTTP 503 tren queue health. Xem lich su alert bang quyen viewer qua `GET /api/v1/pipeline/alerts`.
-
-Neu backend chua len:
-
-```powershell
-docker compose logs --tail=100 backend
-```
-
-## Dang nhap
-
-Neu day la database moi, dang nhap bang credentials trong `.env`:
-
-```powershell
-$login = Invoke-RestMethod http://localhost:8080/api/v1/auth/login -Method Post -ContentType 'application/json' -Body (@{
-  email = 'admin@example.com'
-  password = 'change-me-now'
-} | ConvertTo-Json)
-$token = $login.token
-$token
-```
-
-Doi `email` va `password` neu ban da sua `.env`.
-
-Hoac mo `http://localhost:3000/accounts`. Frontend luu token trong trinh duyet voi key `siem_token`.
-
-Kiem tra quyen admin:
-
-```powershell
-Invoke-RestMethod http://localhost:8080/api/v1/users -Headers @{ Authorization = "Bearer $token" }
-```
-
-Neu nhan `401`, dung password da tao cung PostgreSQL volume hien tai. Voi moi truong local co the xoa toan bo du lieu va khoi tao lai co chu dich:
-
-```powershell
-docker compose down -v
-docker compose up -d --build
-```
-
-Lenh `down -v` xoa du lieu PostgreSQL, Redis va Elasticsearch.
-
-## Gui log thu nghiem
-
-```powershell
-"Failed password for root from 192.0.2.10 port 55222 ssh2" | docker compose run --rm -T ingest `
-  --source-type linux_sshd `
-  --hostname web-01 `
-  --agent-id manual
-```
-
-Kiem tra raw log trong Redis:
-
-```powershell
-docker compose exec redis redis-cli XRANGE siem:raw-logs - +
-```
-
-Phan biet log da di qua tung buoc:
-
-```powershell
-# Logstash da nhan Beats va co gui HTTP thanh cong hay khong
-docker compose logs --tail=100 logstash
-
-# Redis stream co message, consumer group dang xu ly bao nhieu message
-docker compose exec redis redis-cli XLEN siem:raw-logs
-docker compose exec redis redis-cli XINFO GROUPS siem:raw-logs
-```
-
-Hoac xem JSON trang thai da tong hop (can JWT viewer+):
-
-```powershell
-Invoke-RestMethod http://localhost:8080/api/v1/pipeline/status -Headers @{ Authorization = "Bearer $token" }
-```
-
-`POST /api/v1/ingest` tra `202` khi backend da ghi log vao Redis. Trong ket qua status, `pending > 0` nghia la Redis da nhan nhung parser chua ACK; `pending = 0` nghia la consumer group da ACK het batch. Kiem tra Elasticsearch de xac nhan event da duoc index.
-
-Lenh producer tren chi kiem tra truc tiep Redis. De kiem tra dung luong monitoring qua HTTP API va dang ky asset, dung:
-
-```powershell
-$payload = @{
-  event = @{ original = "Failed password for root from 192.0.2.10" }
-  source_type = 'linux_sshd'
-  host = @{ name = 'web-01' }
-  agent = @{ id = 'manual-http' }
-} | ConvertTo-Json -Depth 4
-Invoke-RestMethod http://localhost:8080/api/v1/ingest -Method Post -ContentType 'application/json' -Body $payload
-```
-
-Doi vai giay roi kiem tra event da chuan hoa trong Elasticsearch:
-
-```powershell
-Invoke-RestMethod 'http://localhost:9200/normalized_events/_search?pretty'
-```
-
-Kiem tra host da duoc ghi vao PostgreSQL:
-
-```powershell
-docker compose exec postgres psql -U siem -d siem -c "SELECT hostname, os_type FROM assets ORDER BY asset_id DESC LIMIT 10;"
-```
-
-Frontend:
-
-- `http://localhost:3000/events`
-- `http://localhost:3000/assets`
-
-## Tao rule va kiem tra alert
-
-Tao rule:
-
-```powershell
-docker compose exec postgres psql -U siem -d siem -c "INSERT INTO rules (name, regex_pattern, target_field, severity, category) VALUES ('SSH failure', 'Failed password', 'message', 'high', 'authentication');"
-```
-
-Gui lai log thu nghiem:
-
-```powershell
-"Failed password for root from 192.0.2.10 port 55222 ssh2" | docker compose run --rm -T ingest `
-  --source-type linux_sshd `
-  --hostname web-01 `
-  --agent-id manual
-```
-
-Kiem tra alert:
-
-```powershell
-docker compose exec postgres psql -U siem -d siem -c "SELECT alert_id, severity, status, summary FROM alerts ORDER BY alert_id DESC LIMIT 10;"
-```
-
-Frontend:
-
-- `http://localhost:3000/alerts`
-- `http://localhost:3000/rules`
-
-## Chuyển sang Elastic Agent + Fleet
-
-Với Elastic Agent + Fleet, mỗi máy chủ/host chỉ cần cài một agent duy nhất, rồi đăng ký với Fleet Server để nhận policy thu thập log từ nhiều service khác nhau như Linux syslog, Windows Event Log, Docker, NGINX, SSH, v.v. Điều này rõ ràng mạnh hơn Filebeat/Winlogbeat khi ta cần quản lý nhiều serviço/host trong một hệ thống SIEM kiểu enterprise.
-
-Backend cũng được bổ sung một route `POST /api/v1/fleet/agents` để đồng bộ asset: khi một agent enroll, server sẽ upsert vào bảng `assets` và `log_sources`, từ đó nhiều client có thể gửi log lên cùng server mà không cần tạo asset thủ công trước. Về mặt kiến trúc, đây là một SIEM mini nhưng chạy theo đúng nguyên tắc của Elastic Fleet: Fleet Server là thành phần nền của hệ thống, không phải phụ kiện tùy chọn.
-
-Enrollment bắt buộc `agent_id`, `hostname`, `os_type` (`linux`, `windows`, hoặc `docker`) và source type hợp lệ. Server tự động gán tag `env`, `team`, `criticality`, lưu `last_seen`, đánh dấu agent stale sau 5 phút, và lưu policy deployment history. Template policy nằm trong `config/fleet-policies.yml`. API vận hành gồm `POST /api/v1/fleet/agents`, `GET /api/v1/fleet/agents`, và `GET /api/v1/fleet/deployments`.
-
-1. Tải Elastic Agent theo đúng OS/arch.
-2. Dùng policy mẫu trong `config/elastic-agent.yml`.
-3. Chỉnh sửa host Logstash nếu chạy ngoài cùng máy:
-
-```yaml
-outputs:
-  default:
-    type: logstash
-    hosts: ["IP_MAY_CHAY_SIEM:5044"]
-```
-
-4. Đối với Linux host:
+Kiến trúc Sentinel hoàn toàn **Stateless & Scale-Ready**. Khi cần tăng tải từ 20 máy lên 50 máy (>500k logs/ngày), khởi chạy cụm phân tải qua Nginx Gateway:
 
 ```bash
-sudo elastic-agent install -f -c /etc/elastic-agent/elastic-agent.yml
-sudo systemctl enable --now elastic-agent
-sudo systemctl status elastic-agent
-sudo journalctl -u elastic-agent -f
+docker compose -f docker-compose.yml -f docker-compose.scale.yml up -d --scale backend=2
 ```
 
-5. Với Fleet, agent sẽ tự đăng ký qua `fleet-server` ở port `8220`; backend sẽ nhận metadata `hostname`, `os_type`, `agent_id`, và `source_types` rồi upsert vào bảng assets/log_sources. Trong môi trường thực tế, Fleet Server là thành phần luôn chạy và agent liên tục poll policy từ đây.
+👉 **Đọc tài liệu chi tiết**: [DEPLOYMENT_SCALE_GUIDE.md](file:///c:/Users/Admin/a-mini-SIEM-platform/DEPLOYMENT_SCALE_GUIDE.md) để xem phân tích toán học tải 20 máy, bảng phân bổ RAM tối thiểu, cấu hình Rsyslog/Vector trên Linux và kịch bản benchmark stress-test.
 
-```powershell
-Invoke-RestMethod http://localhost:8080/api/v1/fleet/agents -Method Post -ContentType 'application/json' -Body (@{
-  agent_id = 'linux-fleet-01'
-  hostname = 'web-02'
-  os_type = 'linux'
-  ip_address = '10.0.0.12'
-  source_types = @('system','docker','elastic_agent')
-  tags = @{ env = 'prod'; team = 'platform' }
-} | ConvertTo-Json -Depth 4)
-```
+---
 
-5. Đối với Windows host:
+## 🛠️ Lộ Trình Phát Triển & Thay Thế Module
 
-```powershell
-.\elastic-agent.exe install -f -c .\elastic-agent.yml
-Restart-Service elastic-agent
-Get-Service elastic-agent
-```
+Hệ thống được thiết kế theo kiến trúc tháo lắp (Pluggable), cho phép nâng cấp từng phân hệ độc lập khi scale lên mức Enterprise:
+* **Redis Streams** $\longrightarrow$ **Apache Kafka / Redpanda**
+* **Docker Compose** $\longrightarrow$ **Kubernetes (K8s/K3s) + KEDA Auto-scaling**
+* **Elasticsearch** $\longrightarrow$ **ClickHouse / OpenSearch**
+* **HTTP/JSON Ingest** $\longrightarrow$ **gRPC / OpenTelemetry Collector**
+* **Local JWT** $\longrightarrow$ **Keycloak / OIDC / Azure AD**
 
-6. Với Elastic Agent, ta có thể gắn nhiều input trong cùng một policy: `logfile`, `winlog`, `docker`, `system`, `custom`, v.v. Điều này giúp quản lý log từ nhiều service trong một agent thay vì phải cài Filebeat + Winlogbeat riêng cho từng loại host.
+👉 **Đọc tài liệu chi tiết**: [develop.md](file:///c:/Users/Admin/a-mini-SIEM-platform/develop.md) để xem ma trận công nghệ, hướng dẫn setup môi trường phát triển cục bộ và quy chuẩn đóng góp mã nguồn.
 
-> Lưu ý: luồng dữ liệu vẫn giữ nguyên mô hình hiện tại: Elastic Agent -> Logstash -> backend HTTP ingest -> Redis -> parser -> Elasticsearch. Chỉ thay đổi tầng thu thập, không cần sửa pipeline nghiệp vụ trong SIEM.
+---
 
-## Cai theo doi may Windows
-
-Dùng Elastic Agent tren may Windows can theo doi. Backend Docker va service `logstash` phai dang chay. Agent gui log den port `5044` qua Logstash; Logstash moi gui HTTP toi backend.
-
-1. Cai Elastic Agent tu Elastic.
-2. Sử dụng file mẫu `config/elastic-agent.yml` và bật input `winlog` trong policy.
-3. Nếu Logstash chay tren cung may, giu mac dinh `localhost`. Neu Docker chay tren may khac, sua host trong config:
-
-```yaml
-outputs:
-  default:
-    type: logstash
-    hosts: ["IP_MAY_CHAY_SIEM:5044"]
-```
-
-4. Kiem tra cau hinh trong PowerShell Administrator:
-
-```powershell
-.\elastic-agent.exe inspect -c .\elastic-agent.yml
-```
-
-5. Ngoai ra, co the tai lai policy va khoi dong lai service:
-
-```powershell
-Restart-Service elastic-agent
-Get-Service elastic-agent
-```
-
-6. Xem log neu chua gui duoc:
-
-```powershell
-Get-Content 'C:\ProgramData\Elastic\Agent\logs\elastic-agent-*' -Tail 100
-```
-
-Elastic Agent cho phep gom `Security`, `System` va cac log daemon/phu trong cung mot policy, đồng thời dễ lan truyen/quan ly dọc theo nhiều host va service.
-
-## Cai theo doi may Linux
-
-Dùng Elastic Agent tren may Linux can theo doi. Chep `config/elastic-agent.yml` vao Elastic Agent va sua dia chi Logstash neu Docker chay tren may khac.
-
-```yaml
-outputs:
-  default:
-    type: logstash
-    hosts: ["IP_MAY_CHAY_SIEM:5044"]
-```
-
-Agency thu thập `/var/log/auth.log`, `/var/log/syslog`, log Docker, log nginx, v.v. trong một policy duy nhất.
-
-```bash
-sudo elastic-agent inspect -c /etc/elastic-agent/elastic-agent.yml
-sudo systemctl enable --now elastic-agent
-sudo systemctl status elastic-agent
-sudo journalctl -u elastic-agent -f
-```
-
-Neu Filebeat chay truc tiep tren may, dung IP hoac `localhost` cua may chay Docker. `backend:8080` chi dung cho container noi bo, khong dung trong cau hinh agent chay tren Windows/Linux host.
-
-## Xac minh monitoring cap nhat
-
-Sau khi agent chay, tao mot su kien moi tren may duoc theo doi. Kiem tra theo thu tu:
-
-```powershell
-docker compose exec redis redis-cli XREVRANGE siem:raw-logs + - COUNT 5
-Invoke-RestMethod 'http://localhost:9200/normalized_events/_search?pretty'
-docker compose exec postgres psql -U siem -d siem -c "SELECT a.hostname, l.source_type, l.last_seen FROM assets a LEFT JOIN log_sources l ON l.asset_id=a.asset_id ORDER BY a.asset_id DESC LIMIT 10;"
-```
-
-Sau khi Parser xu ly xong, mo `http://localhost:3000`. Overview, Alerts va Log Explorer tu goi API lai moi 3 giay. Day la polling, khong phai WebSocket realtime; do tre thuong la vai giay den khoang 3 giay cong thoi gian xu ly queue. Neu can cap nhat tung event ngay lap tuc, can them SSE/WebSocket sau.
-
-## REST API
-
-| Endpoint | Quyen | Muc dich |
-| --- | --- | --- |
-| `GET /healthz` | public | Health check |
-| `POST /api/v1/auth/login` | public | Dang nhap, tra JWT 12 gio |
-| `POST /api/v1/ingest` | public local | Nhan log tu agent |
-| `GET /api/v1/summary` | viewer+ | Metrics dashboard |
-| `GET /api/v1/pipeline/status` | viewer+ | Redis stream length, pending messages va consumer count |
-| `GET /api/v1/events?limit=100` | viewer+ | Event tu Elasticsearch |
-| `GET /api/v1/assets` | viewer+ | Host va log source |
-| `GET /api/v1/rules` | viewer+ | Danh sach rule |
-| `POST /api/v1/rules` | admin | Tao rule |
-| `PUT /api/v1/rules/{id}` | admin | Cap nhat rule |
-| `DELETE /api/v1/rules/{id}` | admin | Xoa rule |
-| `GET /api/v1/alerts` | viewer+ | Danh sach alert |
-| `PATCH /api/v1/alerts/{id}` | analyst+ | Doi trang thai/gan alert |
-| `GET /api/v1/users` | admin | Danh sach user |
-| `POST /api/v1/users` | admin | Tao user |
-| `DELETE /api/v1/users/{id}` | admin | Vo hieu hoa user |
-
-## Troubleshooting
-
-### Port da duoc su dung
-
-Doi port trong `.env`:
-
-```dotenv
-FRONTEND_PORT=3001
-API_PORT=8081
-NEXT_PUBLIC_API_URL=http://localhost:8081
-```
-
-Sau do rebuild:
-
-```powershell
-docker compose up -d --build backend frontend
-```
-
-### `relation "users" does not exist`
-
-Volume duoc tao truoc migration users:
-
-```powershell
-Get-Content .\backend\migrations\002_users.sql | docker compose exec -T postgres psql -U siem -d siem
-docker compose restart backend
-```
-
-### Login tra `401`
-
-Admin chi duoc tao o lan khoi tao database dau tien. Dung password cu cua volume hoac reset local bang `docker compose down -v`.
-
-### Agent khong gui duoc log
-
-- Kiem tra `http://IP_MAY_CHAY_SIEM:8080/healthz` tu may agent.
-- Kiem tra firewall cho TCP `8080`.
-- Kiem tra Fleet Server da chay o port `8220` va agent da enroll thanh cong.
-- Kiem tra asset da ton tai trong PostgreSQL: `SELECT asset_id, hostname, os_type FROM assets ORDER BY asset_id DESC LIMIT 10;`
-- Kiem tra Redis Stream va Elasticsearch theo phan “Xac minh monitoring cap nhat”.
-
-## Test va phat trien
-
-Backend:
-
-```powershell
-Push-Location backend
-go test ./...
-Pop-Location
-```
-
-Frontend:
-
-```powershell
-Push-Location frontend
-npm ci
-npm run lint
-npm run build
-Pop-Location
-```
-
-Integration test yeu cau stack healthy va credentials admin khop PostgreSQL volume:
-
-```powershell
-docker compose up -d --build postgres redis elasticsearch backend
-Push-Location backend
-go test -tags=integration ./integration
-Pop-Location
-```
-
-## Dung moi truong
-
-Giu du lieu:
-
-```powershell
-docker compose down
-```
-
-Xoa ca du lieu local:
-
-```powershell
-docker compose down -v
-```
-
-## Cau truc
-
-- `backend/cmd/api`: khoi dong HTTP API, Parser va Rule Engine.
-- `backend/cmd/ingest`: producer test doc stdin/file va ghi Redis Stream.
-- `backend/cmd/parser`: parser CLI doc lap de debug.
-- `backend/internal`: API, auth, ingest, parser, rule engine va storage.
-- `backend/migrations`: schema PostgreSQL.
-- `config/elastic-agent.yml`: policy thu thap log tập trung cho nhiều service/host.
-- `config/logstash-pipeline.conf`: nhận Beats/Elastic Agent input và forward sang backend.
-- `frontend`: Next.js dashboard.
-- `docker-compose.yml`: PostgreSQL, Redis, Elasticsearch, Logstash, Elastic Agent, backend va frontend.
-
-## Gioi han local
-
-- `POST /api/v1/ingest` chua co API key hoac mTLS, chi phu hop local/demo.
-- Dashboard dung polling 10 giay, chua co WebSocket.
-- Correlation rule dung Redis counter don gian theo rule/hostname.
-- Elasticsearch dang tat security trong Compose local.
+## 📄 Bản Quyền & Giấy Phép
+Dự án được phân phối dưới giấy phép mã nguồn mở MIT License. Phù hợp cho đồ án tốt nghiệp chuyên ngành An toàn thông tin / Khoa học máy tính và portfolio tuyển dụng Fullstack / DevOps / Security Engineer.

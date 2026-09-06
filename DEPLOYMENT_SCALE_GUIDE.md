@@ -222,6 +222,17 @@ sinks:
 
 ---
 
+### Cách D: Dùng Native Windows PowerShell Agent (Dành cho máy tính / Server Windows)
+Hệ thống tích hợp sẵn script tự động hóa [sentinel-windows-agent.ps1](file:///c:/Users/Admin/a-mini-SIEM-platform/scripts/sentinel-windows-agent.ps1) thu thập trực tiếp sự kiện từ Windows Security Event Log (EventCode 4624, 4672, 4625):
+
+```powershell
+# Chạy trực tiếp trên máy Windows của bạn hoặc các máy trạm trong mạng LAN:
+powershell -ExecutionPolicy Bypass -File .\scripts\sentinel-windows-agent.ps1
+```
+* **Tính năng**: Tự động đăng nhập Admin $\rightarrow$ Enrolled Agent $\rightarrow$ Cấp phát SHA-256 API Key $\rightarrow$ Đẩy sự kiện đăng nhập và cảnh báo lên SIEM.
+
+---
+
 ## 6. Kịch Bản Benchmark / Stress Test Thực Tế
 
 Để chứng minh hệ thống chịu tải tốt trước hội đồng phản biện hoặc nhà tuyển dụng, chạy script benchmark sau từ máy trạm:
