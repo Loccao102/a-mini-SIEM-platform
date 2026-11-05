@@ -37,7 +37,7 @@ services:
     image: alpine:3.22
     # Elasticsearch uses UID 1000. Docker named volumes start root-owned.
     # This one-shot container only touches the snapshot volume.
-    command: ["sh", "-c", "mkdir -p /snapshots/siem-vps-local && chown -R 1000:0 /snapshots"]
+    command: ["sh", "-c", "mkdir -p /snapshots/siem-vps-local && chown 1000:0 /snapshots /snapshots/siem-vps-local"]
     user: "0:0"
     volumes:
       - elasticsearch_snapshots:/snapshots
