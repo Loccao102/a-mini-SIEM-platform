@@ -162,3 +162,11 @@ powershell -ExecutionPolicy Bypass -File .\scripts\sentinel-windows-agent.ps1
 2. Đăng nhập Admin, mở `/system` và xác nhận từng thành phần trả trạng thái và độ trễ thực.
 3. Dùng token Viewer truy cập `/api/v1/system/health` và `/metrics`: phải nhận 403. Khi không token: 401.
 4. Thử tạm ngắt một dependency trên **môi trường staging** để xác nhận /healthz trả 503 và admin dashboard vẫn hiển thị thông tin chẩn đoán. Không thực hiện phép thử gây gián đoạn trên production.
+
+## Incident report không truyền token trên URL
+
+Từ trang `/cases`, nút **Tải báo cáo Incident** giờ gọi API bằng `Authorization: Bearer` rồi tải tệp HTML đã tạo. Mở tệp HTML bằng trình duyệt để **Print / Save as PDF**. Backend hiện xuất HTML để in PDF hoặc JSON, không tạo PDF nhị phân trực tiếp; giao diện được ghi rõ định dạng.
+
+Tất cả endpoint cần JWT không còn chấp nhận `?token=...`; token trong query có thể bị lưu vào lịch sử browser, log proxy và hệ thống phân tích. Mọi client/agent quản trị phải dùng header Authorization. API key ingest vẫn giữ cơ chế Bearer API key riêng. Đây là thay đổi tương thích API có chủ đích trước khi public dịch vụ lên VPS.
+
+Các giá trị động của báo cáo HTML (bao gồm severity, action type, status và CSS class priority) đã được escape để tránh chèn thẻ HTML khi dữ liệu case bị nhiễm ký tự không tin cậy.
