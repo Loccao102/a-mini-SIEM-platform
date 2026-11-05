@@ -1,0 +1,25 @@
+{
+  email {$ACME_EMAIL}
+}
+
+# One public hostname serves both the SOC dashboard and the Go API.
+# Never expose Postgres, Redis or Elasticsearch through this proxy.
+{$SIEM_DOMAIN} {
+  encode zstd gzip
+
+  header {
+    -Server
+    X-Content-Type-Options "nosniff"
+    Referrer-Policy "strict-origin-when-cross-origin"
+    X-Frame-Options "DENY"
+  }
+
+  @api path /api/* /healthz /healthz/*
+  handle @api {
+    reverse_proxy backend:8080
+  }
+
+  handle {
+    reverse_proxy frontend:3000
+  }
+}
