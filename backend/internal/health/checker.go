@@ -145,7 +145,13 @@ func (h *HealthChecker) CheckRedis(ctx context.Context) ServiceHealth {
 	// another health request overwriting the same value between SET and GET.
 	testKey := fmt.Sprintf("health:test:%d", time.Now().UnixNano())
 	testValue := "ok"
-	defer h.redis.Del(context.WithoutCancel(ctx), testKey)
+	defer func() {
+		// A short, independent timeout lets cleanup run even if the request
+		// was canceled, without holding the health handler indefinitely.
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		defer cancel()
+		_ = h.redis.Del(cleanupCtx, testKey).Err()
+	}()
 
 	err = h.redis.Set(ctx, testKey, testValue, 10*time.Second).Err()
 	if err != nil {
@@ -273,32 +279,27 @@ func (h *HealthChecker) CheckConnectorHealth(ctx context.Context) ServiceHealth 
 	start := time.Now()
 	checks := make(map[string]string)
 
-	// Check if ingest consumer group exists
+	// One XINFO GROUPS round-trip is enough for both checks. The former
+	// implementation issued the exact same Redis command twice and used the
+	// first arbitrary group for the parser's consumer count.
 	groups, err := h.redis.XInfoGroups(ctx, ingest.DefaultStream).Result()
 	if err != nil {
 		if err == redis.Nil || strings.Contains(err.Error(), "no such key") {
 			checks["ingest_group"] = "not created yet"
-		} else {
-			checks["ingest_group"] = fmt.Sprintf("error: %v", err)
-		}
-	} else if len(groups) == 0 {
-		checks["ingest_group"] = "not found (waiting for connection)"
-	} else {
-		checks["ingest_group"] = fmt.Sprintf("ok (%d consumers)", groups[0].Consumers)
-	}
-
-	// Check if parser consumer group exists
-	pGroups, err := h.redis.XInfoGroups(ctx, ingest.DefaultStream).Result()
-	if err != nil {
-		if err == redis.Nil || strings.Contains(err.Error(), "no such key") {
 			checks["parser_group"] = "not created yet"
 		} else {
-			checks["parser_group"] = fmt.Sprintf("error: %v", err)
+			checks["ingest_group"] = fmt.Sprintf("error: %v", err)
+			checks["parser_group"] = checks["ingest_group"]
 		}
-	} else if len(pGroups) == 0 {
-		checks["parser_group"] = "not found (waiting for connection)"
 	} else {
-		checks["parser_group"] = fmt.Sprintf("ok (%d consumers)", pGroups[0].Consumers)
+		checks["ingest_group"] = fmt.Sprintf("ok (%d groups)", len(groups))
+		checks["parser_group"] = "not found (waiting for connection)"
+		for _, group := range groups {
+			if group.Name == parser.DefaultConsumerGroup {
+				checks["parser_group"] = fmt.Sprintf("ok (%d consumers)", group.Consumers)
+				break
+			}
+		}
 	}
 
 	status := StatusHealthy
