@@ -7,7 +7,7 @@ export function normalizeOrigin(value){
   let url;
   try{url=new URL(value);}catch{throw new Error("Cần URL HTTPS hợp lệ.");}
   if(url.protocol!=="https:"||url.username||url.password||url.port||
-     url.pathname!=="/"||url.search||url.hash)
+     url.pathname!=="/"||url.search||url.hash||url.origin!==value)
     throw new Error("Origin phải là https://hostname, không kèm path, port hoặc credentials.");
   return url.origin;
 }
