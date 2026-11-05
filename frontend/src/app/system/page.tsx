@@ -60,11 +60,11 @@ export default function SystemPage(){
 
   useEffect(()=>{
     active.current=true;
-    void refresh();
+    const initial=window.setTimeout(()=>{void refresh();},0);
     const interval=window.setInterval(()=>{
       if(document.visibilityState==="visible")void refresh();
     },15000);
-    return ()=>{active.current=false;window.clearInterval(interval);};
+    return ()=>{active.current=false;window.clearTimeout(initial);window.clearInterval(interval);};
   },[refresh]);
 
   const services=snapshot?.services||{};
