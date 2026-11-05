@@ -461,7 +461,7 @@ func (handler *Handler) caseReport(response http.ResponseWriter, request *http.R
       <div style="color: #6b7280; font-size: 14px;">Case #` + strconv.FormatInt(caseID, 10) + ` &bull; ` + escapeHTML(title) + `</div>
     </div>
     <div style="text-align: right;">
-      <span class="badge badge-` + strings.ToLower(priority) + `">` + escapeHTML(priority) + ` PRIORITY</span>
+      <span class="badge badge-` + escapeHTML(strings.ToLower(priority)) + `">` + escapeHTML(priority) + ` PRIORITY</span>
       <div style="margin-top: 6px; font-size: 12px; color: #6b7280;">Generated: ` + time.Now().UTC().Format("2006-01-02 15:04:05 UTC") + `</div>
     </div>
   </div>
@@ -497,7 +497,7 @@ func (handler *Handler) caseReport(response http.ResponseWriter, request *http.R
 			if t, ok := a["created_at"].(time.Time); ok {
 				cAtStr = t.UTC().Format("15:04:05")
 			}
-			sb.WriteString(`<tr><td>#` + fmt.Sprint(a["alert_id"]) + `</td><td>` + fmt.Sprint(a["severity"]) + `</td><td>` + escapeHTML(fmt.Sprint(a["description"])) + `</td><td><code>` + escapeHTML(src) + `</code></td><td><code>` + escapeHTML(dst) + `</code></td><td>` + fmt.Sprint(a["event_count"]) + `</td><td>` + cAtStr + `</td></tr>`)
+			sb.WriteString(`<tr><td>#` + fmt.Sprint(a["alert_id"]) + `</td><td>` + escapeHTML(fmt.Sprint(a["severity"])) + `</td><td>` + escapeHTML(fmt.Sprint(a["description"])) + `</td><td><code>` + escapeHTML(src) + `</code></td><td><code>` + escapeHTML(dst) + `</code></td><td>` + fmt.Sprint(a["event_count"]) + `</td><td>` + cAtStr + `</td></tr>`)
 		}
 		sb.WriteString(`</tbody></table>`)
 	}
@@ -518,7 +518,7 @@ func (handler *Handler) caseReport(response http.ResponseWriter, request *http.R
 			if r, ok := ex["require_approval"].(bool); ok && r {
 				reqApp = "Yes (Analyst Confirmed)"
 			}
-			sb.WriteString(`<tr><td>#` + fmt.Sprint(ex["execution_id"]) + `</td><td>` + escapeHTML(fmt.Sprint(ex["playbook_name"])) + `</td><td><code>` + escapeHTML(fmt.Sprint(ex["target"])) + `</code></td><td>` + fmt.Sprint(ex["action_type"]) + `</td><td>` + reqApp + `</td><td><strong>` + fmt.Sprint(ex["status"]) + `</strong></td></tr>`)
+			sb.WriteString(`<tr><td>#` + fmt.Sprint(ex["execution_id"]) + `</td><td>` + escapeHTML(fmt.Sprint(ex["playbook_name"])) + `</td><td><code>` + escapeHTML(fmt.Sprint(ex["target"])) + `</code></td><td>` + escapeHTML(fmt.Sprint(ex["action_type"])) + `</td><td>` + reqApp + `</td><td><strong>` + escapeHTML(fmt.Sprint(ex["status"])) + `</strong></td></tr>`)
 		}
 		sb.WriteString(`</tbody></table>`)
 	}
