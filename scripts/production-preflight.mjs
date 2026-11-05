@@ -43,9 +43,28 @@ export function checkProductionConfig(env) {
   const adminEmail = env.ADMIN_EMAIL ?? "";
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(adminEmail)) errors.push("ADMIN_EMAIL: email admin chưa hợp lệ.");
   if ((env.MODE ?? "") !== "production") errors.push("MODE phải là production khi đưa lên VPS.");
-  const apiUrl = env.NEXT_PUBLIC_API_URL ?? "";
-  if (!/^https:\/\/[^/\s]+(?:\/.*)?$/i.test(apiUrl) || /localhost|127\.0\.0\.1/i.test(apiUrl)) {
-    errors.push("NEXT_PUBLIC_API_URL phải là URL HTTPS public thật (không dùng localhost).");
+  const domain=(env.SIEM_DOMAIN??"").toLowerCase();
+  if(!/^(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(domain) ||
+    domain.endsWith(".local") || domain.endsWith(".localhost")){
+    errors.push("SIEM_DOMAIN phải là hostname DNS public trỏ tới VPS (ví dụ siem.example.org).");
+  }
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(env.ACME_EMAIL??"")){
+    errors.push("ACME_EMAIL phải là email hợp lệ để Caddy đăng ký chứng chỉ TLS.");
+  }
+  const apiUrl=env.NEXT_PUBLIC_API_URL??"";
+  try{
+    const url=new URL(apiUrl);
+    if(url.protocol!=="https:"||url.username||url.password||url.port||
+       url.pathname!=="/"||url.search||url.hash||url.hostname!==domain){
+      errors.push("NEXT_PUBLIC_API_URL phải là https://SIEM_DOMAIN, KHÔNG thêm /api, port hoặc dấu / cuối.");
+    }
+  }catch{
+    errors.push("NEXT_PUBLIC_API_URL phải là URL HTTPS hợp lệ trùng SIEM_DOMAIN.");
+  }
+  // Docker Compose interpolates POSTGRES_PASSWORD inside a PostgreSQL URI.
+  // Restrict to URL-unreserved characters rather than misreading '@', '/', '?'.
+  if(env.POSTGRES_PASSWORD&&!/^[A-Za-z0-9._~-]+$/.test(env.POSTGRES_PASSWORD)){
+    errors.push("POSTGRES_PASSWORD chỉ dùng ký tự URL-safe (A-Z,a-z,0-9,._~-) vì chuỗi kết nối Compose chưa URL-encode.");
   }
   const bindNames = ["POSTGRES_BIND_HOST","REDIS_BIND_HOST","ELASTICSEARCH_BIND_HOST"];
   for (const name of bindNames) {
@@ -53,10 +72,11 @@ export function checkProductionConfig(env) {
       errors.push(name + " phải chỉ bind loopback; không đưa DB/Redis/Elasticsearch trực tiếp ra Internet.");
     }
   }
-  if (env.API_BIND_HOST === "0.0.0.0")
-    warnings.push("API đang lắng nghe mọi interface: cần TLS reverse proxy, firewall và hạn chế truy cập.");
-  if (env.FRONTEND_BIND_HOST === "0.0.0.0")
-    warnings.push("Frontend mở public HTTP: cần TLS reverse proxy.");
+  for(const name of ["API_BIND_HOST","FRONTEND_BIND_HOST","BEATS_BIND_HOST","FLEET_BIND_HOST"]){
+    if(env[name]&&!["127.0.0.1","::1"].includes(env[name])){
+      errors.push(name+": dịch vụ phải chỉ bind loopback; traffic bên ngoài qua Caddy HTTPS.");
+    }
+  }
   if (!env.TELEGRAM_BOT_TOKEN) warnings.push("Không cấu hình Telegram; cảnh báo qua Telegram sẽ không được gửi.");
   return { errors, warnings };
 }
