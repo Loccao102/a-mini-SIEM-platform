@@ -45,6 +45,7 @@ export default function SystemPage(){
       if(active.current){setSnapshot(result);setError("");}
     }catch(reason){
       if(active.current){
+        if(reason instanceof ApiError&&(reason.status===401||reason.status===403))setSnapshot(null);
         setError(reason instanceof ApiError&&reason.status===403?
           "Chỉ tài khoản SOC Admin được xem chẩn đoán hệ thống.":
           reason instanceof ApiError&&reason.status===401?
