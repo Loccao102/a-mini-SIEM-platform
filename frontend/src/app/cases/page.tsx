@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
-import { addCaseNote, ApiError, CaseRecord, CaseTimelineItem, createCase, getCaseTimeline, getCases, updateCase } from "@/lib/api";
+import { addCaseNote, ApiError, CaseRecord, CaseTimelineItem, createCase, getCaseReportHtml, getCaseTimeline, getCases, updateCase } from "@/lib/api";
 import { SeverityBadge } from "@/components/severity-badge";
 
 export default function CasesPage() {
@@ -12,6 +12,7 @@ export default function CasesPage() {
   const [title, setTitle] = useState("");
   const [note, setNote] = useState("");
   const [message, setMessage] = useState("");
+  const [exportingReport,setExportingReport]=useState(false);
 
   async function loadCases() {
     try {
@@ -65,11 +66,24 @@ export default function CasesPage() {
     setTimeline(await getCaseTimeline(selected.case_id));
   }
 
-  function handleExportReport() {
-    if (!selected) return;
-    const token = typeof window !== "undefined" ? localStorage.getItem("siem_token") : "";
-    const apiURL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
-    window.open(`${apiURL}/api/v1/cases/${selected.case_id}/report?token=${encodeURIComponent(token || "")}`, "_blank");
+  async function handleExportReport() {
+    if (!selected || exportingReport) return;
+    setExportingReport(true);setMessage("");
+    try{
+      const blob=await getCaseReportHtml(selected.case_id);
+      const url=URL.createObjectURL(blob);
+      try{
+        const a=document.createElement("a");
+        a.href=url;
+        a.download="sentinel-incident-"+selected.case_id+".html";
+        document.body.appendChild(a);a.click();a.remove();
+        setMessage("Đã tải báo cáo HTML. Mở tệp trong trình duyệt rồi dùng Print / Save as PDF.");
+      }finally{window.setTimeout(()=>URL.revokeObjectURL(url),10000);}
+    }catch(error){
+      setMessage(error instanceof ApiError&&error.status===401?
+        "Phiên đăng nhập hết hạn. Đăng nhập lại để tải báo cáo.":
+        "Không thể tải báo cáo sự cố. Hãy kiểm tra quyền tài khoản và API.");
+    }finally{setExportingReport(false);}
   }
 
   return (
@@ -102,8 +116,8 @@ export default function CasesPage() {
               <option value="open">Open</option><option value="investigating">Investigating</option><option value="resolved">Resolved</option><option value="closed">Closed</option>
             </select>
             <div className="mt-3">
-              <button type="button" onClick={handleExportReport} className="w-full text-xs font-semibold py-2 px-3 border border-blue-500 text-blue-400 hover:bg-blue-950/40 rounded transition-colors">
-                📄 Xuất Báo Cáo Incident (PDF / In)
+              <button type="button" disabled={exportingReport} onClick={()=>void handleExportReport()} className="w-full text-xs font-semibold py-2 px-3 border border-blue-500 text-blue-400 hover:bg-blue-950/40 rounded transition-colors disabled:opacity-50">
+                {exportingReport?"Đang tải báo cáo…":"📄 Tải báo cáo Incident (HTML để in PDF)"}
               </button>
             </div>
             <form onSubmit={handleNote} className="mt-4 grid gap-2">
