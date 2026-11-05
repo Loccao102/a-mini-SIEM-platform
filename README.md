@@ -177,3 +177,11 @@ Các giá trị động của báo cáo HTML (bao gồm severity, action type, s
 - Redis sử dụng khóa thử đọc/ghi **riêng cho từng request**, TTL 10 giây và dọn dẹp có timeout, tránh race giữa nhiều lần kiểm tra /healthz hoặc /system.
 - Kiểm tra consumer group dùng một lượt XINFO GROUPS thay vì hai, đồng thời hiển thị đúng số consumer của parser thay vì lấy group đầu tiên bất kỳ.
 - Kiểm thử race trong CI gồm nhiều health probe Redis đồng thời và xác nhận CheckAll chạy đồng thời nhưng vẫn tổng hợp kết quả an toàn.
+
+## Giảm round-trip PostgreSQL trong health check
+
+Với mỗi lần kiểm tra hệ thống, CheckPostgres nay kết hợp xác thực truy vấn SQL và đếm bảng bằng **một query** thay vì SELECT version() rồi đếm bảng. CheckDatabase đọc danh sách năm bảng thiết yếu bằng **một query** thay vì năm lần SELECT EXISTS riêng biệt.
+
+Tổng số query PostgreSQL dùng cho hai nhóm kiểm tra này trên đường khỏe mạnh giảm từ **8 xuống 3** mỗi lượt tổng hợp (không tính phần hàng đợi/alert chỉ chạy khi cần). Status healthy/degraded/unhealthy, danh sách bảng thiếu, và cấu trúc JSON của endpoint được giữ nguyên.
+
+Thay đổi giúp giảm network round-trip khi backend và PostgreSQL ở node khác hoặc VPS chịu tải. Không thay đổi schema, index, migration hoặc quyền truy cập; độ trễ thực tế cần đo trên VPS.
