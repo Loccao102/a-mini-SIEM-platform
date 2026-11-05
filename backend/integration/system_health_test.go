@@ -86,4 +86,9 @@ func TestProtectedSystemHealthIntegration(t *testing.T) {
 	if code!=http.StatusUnauthorized {
 		t.Fatalf("JWT in query was accepted (status %d)",code)
 	}
+	code,_=request("/api/v1/cases/1/report?token="+url.QueryEscape(auth.Token),"")
+	if code!=http.StatusUnauthorized {
+		t.Fatalf("report query JWT was accepted (HTTP %d)",code)
+	}
+
 }
