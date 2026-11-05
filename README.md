@@ -151,8 +151,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\sentinel-windows-agent.ps1
 ### Phân quyền và endpoint
 
 - **Public:** `GET /healthz` và `/healthz/{redis,queue,ingest,parser,elasticsearch}` chỉ trả trạng thái (+ uptime ở /healthz), không công khai chuỗi kết nối, lỗi chi tiết hay tên bảng. /healthz trả HTTP 503 nếu có subsystem unhealthy, 200 khi healthy/degraded, tương thích Docker healthcheck hiện tại.
-- **Admin:** `GET /api/v1/system/health` trả một snapshot đầy đủ có `services`, `checked_at`, `uptime`, `response_time_ms` và các `checks`, luôn trả HTTP 200 khi đã xác thực, kể cả trạng thái unhealthy, để dashboard đọc được lỗi. Viewer/Analyst không có quyền.
-- **Admin:** `GET /metrics` nay cần Bearer token Admin. Đây là thay đổi bảo mật có chủ đích: cấu hình hệ thống scrape metrics phải dùng thông tin xác thực hoặc cho phép giám sát qua hạ tầng nội bộ được bảo vệ. Không mở cổng metrics công khai.
+- **Admin:** `GET /api/v1/system/health` trả một snapshot đầy đủ có `services`, `checked_at`, `uptime`, `response_time_ms` và các `checks`, luôn trả HTTP 200 khi đã xác thực, kể cả trạng thái unhealthy, để dashboard đọc được lỗi. Viewer/Analyst không có quyền. Token phải nằm trong HTTP Authorization: Bearer header, không chấp nhận query string token.
+- **Admin:** `GET /metrics` nay cần Bearer token Admin. Đây là thay đổi bảo mật có chủ đích: cấu hình hệ thống scrape metrics phải dùng thông tin xác thực hoặc cho phép giám sát qua hạ tầng nội bộ được bảo vệ. Không mở cổng metrics công khai; endpoint không cho cache và không chấp nhận JWT qua query string.
 - Backend chỉ chạy `CheckAll` một lần cho mỗi request health tổng quan, tránh kiểm tra lặp và ghi trạng thái cảnh báo hai lần.
 - Giữ `healthz` là health check tổng quát; endpoint này không thay thế `/api/v1/system/health` khi cần điều tra sự cố.
 
