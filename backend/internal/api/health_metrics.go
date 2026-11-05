@@ -84,8 +84,9 @@ func (h *Handler) handleServiceHealth(check func(context.Context) health.Service
 	}
 }
 
-// handleMetrics handles GET /metrics requests
+// handleMetrics handles GET /metrics requests (admin bearer only).
 func (h *Handler) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	ctx := r.Context()
 
 	snapshot := h.metrics.GetSnapshot(ctx)
