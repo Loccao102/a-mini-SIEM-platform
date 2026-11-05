@@ -83,35 +83,27 @@ func (h *HealthChecker) CheckPostgres(ctx context.Context) ServiceHealth {
 
 	checks["connection"] = "ok"
 
-	// Check database is accessible
-	var version string
-	err = conn.QueryRow(ctx, "SELECT version()").Scan(&version)
-	if err != nil {
-		return ServiceHealth{
-			Status:       StatusUnhealthy,
-			Message:      fmt.Sprintf("Query failed: %v", err),
-			ResponseTime: time.Since(start).Milliseconds(),
-			Checks:       checks,
-		}
-	}
-
-	checks["query"] = "ok"
-
-	// Check tables exist (api_keys, assets, users, etc.)
+	// One query checks connectivity and counts expected schema tables.
+	// SELECT version() was an extra network round trip with no readiness value.
 	var tableCount int
 	err = conn.QueryRow(ctx, `
-		SELECT COUNT(*) FROM information_schema.tables 
+		SELECT COUNT(*) FROM information_schema.tables
 		WHERE table_schema='public' AND table_type='BASE TABLE'
 	`).Scan(&tableCount)
-	if err != nil || tableCount < 5 {
+	if err != nil {
 		return ServiceHealth{
-			Status:       StatusDegraded,
-			Message:      fmt.Sprintf("Expected tables not found: %d found", tableCount),
-			ResponseTime: time.Since(start).Milliseconds(),
-			Checks:       checks,
+			Status: StatusUnhealthy, Message: fmt.Sprintf("Query failed: %v", err),
+			ResponseTime: time.Since(start).Milliseconds(), Checks: checks,
 		}
 	}
-
+	checks["query"] = "ok"
+	if tableCount < 5 {
+		return ServiceHealth{
+			Status: StatusDegraded,
+			Message: fmt.Sprintf("Expected tables not found: %d found", tableCount),
+			ResponseTime: time.Since(start).Milliseconds(), Checks: checks,
+		}
+	}
 	checks["tables"] = fmt.Sprintf("ok (%d tables)", tableCount)
 
 	return ServiceHealth{
@@ -326,6 +318,20 @@ func (h *HealthChecker) CheckConnectorHealth(ctx context.Context) ServiceHealth 
 	}
 }
 
+// annotateRequiredTables marks every required table using one catalog snapshot.
+// It returns the first missing table for operator diagnostics.
+func annotateRequiredTables(checks map[string]string, required []string, present map[string]bool) string {
+	missing := ""
+	for _, table := range required {
+		if present[table] {
+			checks[table] = "ok"
+		} else {
+			checks[table] = "missing"
+			if missing == "" { missing = table }
+		}
+	}
+	return missing
+}
 // CheckDatabase checks database connectivity and migration status
 func (h *HealthChecker) CheckDatabase(ctx context.Context) ServiceHealth {
 	start := time.Now()
@@ -365,26 +371,44 @@ func (h *HealthChecker) CheckDatabase(ctx context.Context) ServiceHealth {
 		checks["migrations"] = fmt.Sprintf("ok (latest: %s)", lastMigration)
 	}
 
-	// Check critical tables
+	// Retrieve all critical table names with one catalog lookup instead of
+	// one network round-trip per required table (5 separate SELECT EXISTS).
 	requiredTables := []string{"users", "assets", "api_keys", "rules", "alerts"}
-	for _, table := range requiredTables {
-		var exists bool
-		err := conn.QueryRow(ctx, `
-			SELECT EXISTS(
-				SELECT 1 FROM information_schema.tables 
-				WHERE table_schema='public' AND table_name=$1
-			)
-		`, table).Scan(&exists)
-		if err != nil || !exists {
-			checks[table] = "missing"
-			return ServiceHealth{
-				Status:       StatusUnhealthy,
-				Message:      fmt.Sprintf("Required table %s not found", table),
-				ResponseTime: time.Since(start).Milliseconds(),
-				Checks:       checks,
-			}
+	rows, err := conn.Query(ctx, `
+		SELECT table_name FROM information_schema.tables
+		WHERE table_schema='public' AND table_type='BASE TABLE'
+		  AND table_name = ANY($1::text[])
+	`, requiredTables)
+	if err != nil {
+		return ServiceHealth{
+			Status: StatusUnhealthy, Message: fmt.Sprintf("Table list query failed: %v", err),
+			ResponseTime: time.Since(start).Milliseconds(), Checks: checks,
 		}
-		checks[table] = "ok"
+	}
+	present := make(map[string]bool, len(requiredTables))
+	for rows.Next() {
+		var name string
+		if err = rows.Scan(&name); err != nil {
+			break
+		}
+		present[name] = true
+	}
+	if err == nil {
+		err = rows.Err()
+	}
+	rows.Close()
+	if err != nil {
+		return ServiceHealth{
+			Status: StatusUnhealthy, Message: fmt.Sprintf("Table list query failed: %v", err),
+			ResponseTime: time.Since(start).Milliseconds(), Checks: checks,
+		}
+	}
+	missing := annotateRequiredTables(checks, requiredTables, present)
+	if missing != "" {
+		return ServiceHealth{
+			Status: StatusUnhealthy, Message: fmt.Sprintf("Required table %s not found", missing),
+			ResponseTime: time.Since(start).Milliseconds(), Checks: checks,
+		}
 	}
 
 	return ServiceHealth{
