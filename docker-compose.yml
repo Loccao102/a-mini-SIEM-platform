@@ -33,9 +33,21 @@ services:
       timeout: 3s
       retries: 10
 
+  snapshot-init:
+    image: alpine:3.22
+    # Elasticsearch uses UID 1000. Docker named volumes start root-owned.
+    # This one-shot container only touches the snapshot volume.
+    command: ["sh", "-c", "mkdir -p /snapshots/siem-vps-local && chown -R 1000:0 /snapshots"]
+    user: "0:0"
+    volumes:
+      - elasticsearch_snapshots:/snapshots
+    restart: "no"
   elasticsearch:
     restart: unless-stopped
     image: docker.elastic.co/elasticsearch/elasticsearch:8.19.0
+    depends_on:
+      snapshot-init:
+        condition: service_completed_successfully
     mem_limit: 768m
     environment:
       discovery.type: single-node
