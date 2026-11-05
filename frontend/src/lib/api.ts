@@ -170,6 +170,23 @@ export function getCaseTimeline(id: number) {
   return request<CaseTimelineItem[]>(`/api/v1/cases/${id}/timeline`);
 }
 
+/** Download a printable incident report without embedding JWTs in URLs.
+ * The backend currently generates HTML, not a native PDF.
+ */
+export async function getCaseReportHtml(id:number):Promise<Blob>{
+  if(!Number.isSafeInteger(id)||id<=0)throw new ApiError(400,"Case ID không hợp lệ.");
+  const token=typeof window!=="undefined"?localStorage.getItem("siem_token"):null;
+  if(!token)throw new ApiError(401,"Cần đăng nhập để tải báo cáo.");
+  const response=await fetch(apiURL+"/api/v1/cases/"+id+"/report?format=html",{
+    method:"GET",headers:{"Accept":"text/html","Authorization":"Bearer "+token},
+    cache:"no-store"
+  });
+  if(!response.ok)throw new ApiError(response.status,"Không tải được báo cáo sự cố.");
+  if(!(response.headers.get("Content-Type")||"").toLowerCase().includes("text/html"))
+    throw new ApiError(502,"Backend trả sai định dạng báo cáo.");
+  return new Blob([await response.text()],{type:"text/html;charset=utf-8"});
+}
+
 export async function getEvents(options: { page?: number; pageSize?: number; q?: string; severity?: string; category?: string; host?: string; from?: string; to?: string } = {}) {
   const params = new URLSearchParams({ page: String(options.page ?? 1), page_size: String(options.pageSize ?? 25) });
   for (const [key, value] of Object.entries({ q: options.q, severity: options.severity, category: options.category, host: options.host, from: options.from, to: options.to })) {
