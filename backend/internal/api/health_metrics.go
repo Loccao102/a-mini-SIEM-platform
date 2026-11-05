@@ -65,9 +65,7 @@ func (h *Handler) handleDetailedHealth(w http.ResponseWriter, r *http.Request) {
 	status := health.OverallFromChecks(checks)
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
-	if status == health.StatusUnhealthy {
-		w.WriteHeader(http.StatusServiceUnavailable)
-	}
+	// Always return 200 for authenticated diagnostics so unhealthy details remain readable.
 	_ = json.NewEncoder(w).Encode(DetailedHealthResponse{
 		Status: string(status), Uptime: h.uptime(),
 		CheckedAt: time.Now().UTC(), Services: checks,
