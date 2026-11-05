@@ -17,7 +17,7 @@ export function releasePlan(envFile,project){
   return [
     {title:"Kiểm tra preflight",command:"node",args:["scripts/production-preflight.mjs","--env",envFile]},
     {title:"Kiểm tra cấu hình Compose",command:"docker",args:[...prefix,"config","--quiet"]},
-    {title:"Kiểm tra Caddyfile",command:"docker",args:[...prefix,"run","--rm","--no-deps","caddy","caddy","validate","--config","/etc/caddy/Caddyfile","--adapter","caddyfile"]},
+    {title:"Kiểm tra Caddyfile",command:"docker",args:[...prefix,"run","--rm","--no-deps","caddy","validate","--config","/etc/caddy/Caddyfile","--adapter","caddyfile"]},
     {title:"Dựng và khởi động dịch vụ",command:"docker",args:[...prefix,"up","-d","--build","--wait","--wait-timeout","360","postgres","redis","elasticsearch","backend","ingest","frontend","caddy"]},
   ];
 }
