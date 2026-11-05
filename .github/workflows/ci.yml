@@ -18,9 +18,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: node --test scripts/production-preflight.test.mjs
+      - run: node --test scripts/production-preflight.test.mjs scripts/vps-smoke.test.mjs scripts/vps-release.test.mjs scripts/vps-backup.test.mjs
       - run: node --check scripts/production-preflight.mjs
+      - run: node --check scripts/vps-smoke.mjs
+      - run: node --check scripts/vps-release.mjs
+      - run: node --check scripts/vps-backup.mjs
       - run: docker compose config --quiet
+      - run: docker compose --profile production config --quiet
+      - name: Validate production Caddyfile
+        run: docker run --rm -e SIEM_DOMAIN=siem.example.org -e ACME_EMAIL=ops@example.org -v "$PWD/ops/Caddyfile:/etc/caddy/Caddyfile:ro" caddy:2.10.2-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
 
   backend:
     runs-on: ubuntu-latest
@@ -93,6 +99,26 @@ jobs:
         env:
           INTEGRATION_ADMIN_PASSWORD: ci-only-admin-password
         run: go test -tags=integration -count=1 -timeout=3m -v ./integration
+      - name: Exercise PostgreSQL and Elasticsearch backup on isolated integration stack
+        run: |
+          cat > "$RUNNER_TEMP/siem-backup-test.env" <<'EOF'
+          MODE=production
+          POSTGRES_DB=siem
+          POSTGRES_USER=siem
+          POSTGRES_PASSWORD=CIIntegrationTemporaryPassphrase123
+          ADMIN_EMAIL=ci-operator@example.org
+          ADMIN_PASSWORD=CIIntegrationTemporaryAdminPassphrase123
+          JWT_SECRET=CIIntegrationTemporaryJwtSecretIsNotForProduction123456789
+          SIEM_DOMAIN=ci.example.org
+          ACME_EMAIL=ci-operator@example.org
+          NEXT_PUBLIC_API_URL=https://ci.example.org
+          ELASTICSEARCH_PORT=9200
+          EOF
+          chmod 600 "$RUNNER_TEMP/siem-backup-test.env"
+          node scripts/vps-backup.mjs --env "$RUNNER_TEMP/siem-backup-test.env" --project siem-integration --output "$RUNNER_TEMP/siem-backup-export" --apply
+          test "$(find "$RUNNER_TEMP/siem-backup-export" -name manifest.json | wc -l)" -eq 1
+          find "$RUNNER_TEMP/siem-backup-export" -name postgres.dump -type f -size +0c | grep -q .
+
       - name: Pipeline logs
         if: failure()
         run: docker compose -p siem-integration logs --no-color --tail=200
