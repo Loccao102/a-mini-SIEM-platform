@@ -62,6 +62,15 @@ func TestSystemDiagnosticsAndMetricsRequireAdmin(t *testing.T) {
 			if denied.Code!=http.StatusForbidden {
 				t.Fatalf("Viewer request got HTTP %d, expected 403", denied.Code)
 			}
+
+			adminToken, err := manager.Token(1, "admin@example.org", "admin")
+			if err != nil { t.Fatal(err) }
+			queryRequest := httptest.NewRequest(http.MethodGet,path+"?token="+adminToken,nil)
+			queryDenied := httptest.NewRecorder()
+			handler.ServeHTTP(queryDenied,queryRequest)
+			if queryDenied.Code!=http.StatusUnauthorized {
+				t.Fatalf("Query JWT got HTTP %d, expected 401", queryDenied.Code)
+			}
 		})
 	}
 }
