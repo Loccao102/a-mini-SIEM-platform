@@ -352,3 +352,21 @@ export function releaseBlockedEntity(id: number): Promise<{ status: string; bloc
     method: "POST",
   });
 }
+
+export type SystemServiceHealth={
+  status:"healthy"|"degraded"|"unhealthy";
+  message:string;
+  response_time_ms:number;
+  checks:Record<string,string>;
+};
+export type SystemHealth={
+  status:"healthy"|"degraded"|"unhealthy";
+  uptime:string;
+  checked_at:string;
+  services:Record<string,SystemServiceHealth>;
+};
+
+/** Detailed runtime diagnostics are only available to SOC administrators. */
+export function getSystemHealth():Promise<SystemHealth>{
+  return request<SystemHealth>("/api/v1/system/health");
+}
