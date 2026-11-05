@@ -143,3 +143,22 @@ powershell -ExecutionPolicy Bypass -File .\scripts\sentinel-windows-agent.ps1
 * Kiểm tra danh sách Agent trực tiếp tại [http://localhost:3000/assets](http://localhost:3000/assets).
 * Tìm kiếm log thời gian thực tại [http://localhost:3000/events](http://localhost:3000/events).
 
+
+## Chẩn đoán hệ thống và trạng thái dịch vụ (SOC Admin)
+
+Ở thanh điều hướng tài khoản Admin, mở `/system`. Trang tổng hợp trạng thái theo thời gian thực từ các bộ kiểm tra hiện có: PostgreSQL, Redis, Elasticsearch, database schema, ingest/retry queues và parser connectors. Màn hình hiển thị trạng thái healthy/degraded/unhealthy, thời gian kiểm tra, độ trễ và các chỉ số kết quả; tự tải lại sau 15 giây khi tab đang mở và có nút kiểm tra thủ công.
+
+### Phân quyền và endpoint
+
+- **Public:** `GET /healthz` và `/healthz/{redis,queue,ingest,parser,elasticsearch}` chỉ trả trạng thái (+ uptime ở /healthz), không công khai chuỗi kết nối, lỗi chi tiết hay tên bảng. /healthz trả HTTP 503 nếu có subsystem unhealthy, 200 khi healthy/degraded, tương thích Docker healthcheck hiện tại.
+- **Admin:** `GET /api/v1/system/health` trả một snapshot đầy đủ có `services`, `checked_at`, `uptime`, `response_time_ms` và các `checks`, luôn trả HTTP 200 khi đã xác thực, kể cả trạng thái unhealthy, để dashboard đọc được lỗi. Viewer/Analyst không có quyền.
+- **Admin:** `GET /metrics` nay cần Bearer token Admin. Đây là thay đổi bảo mật có chủ đích: cấu hình hệ thống scrape metrics phải dùng thông tin xác thực hoặc cho phép giám sát qua hạ tầng nội bộ được bảo vệ. Không mở cổng metrics công khai.
+- Backend chỉ chạy `CheckAll` một lần cho mỗi request health tổng quan, tránh kiểm tra lặp và ghi trạng thái cảnh báo hai lần.
+- Giữ `healthz` là health check tổng quát; endpoint này không thay thế `/api/v1/system/health` khi cần điều tra sự cố.
+
+### Kiểm tra vận hành
+
+1. Sau khi triển khai, xem `/healthz` và xác nhận không có trường `services`/`checks` trong phản hồi không xác thực.
+2. Đăng nhập Admin, mở `/system` và xác nhận từng thành phần trả trạng thái và độ trễ thực.
+3. Dùng token Viewer truy cập `/api/v1/system/health` và `/metrics`: phải nhận 403. Khi không token: 401.
+4. Thử tạm ngắt một dependency trên **môi trường staging** để xác nhận /healthz trả 503 và admin dashboard vẫn hiển thị thông tin chẩn đoán. Không thực hiện phép thử gây gián đoạn trên production.
