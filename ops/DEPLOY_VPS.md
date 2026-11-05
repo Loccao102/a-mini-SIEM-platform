@@ -61,7 +61,7 @@ node scripts/vps-backup.mjs --env .env.production --apply
 ```
 
 - Sao lưu PostgreSQL bằng `pg_dump -Fc` vào file chmod 0600 kèm SHA-256.
-- Elasticsearch snapshot qua repository `fs` có path thuộc `/snapshots` (named volume). Script xuất **toàn bộ thư mục snapshot repository** bằng `docker compose cp` ra thư mục backup. Đảm bảo volume `/snapshots` đủ quyền ghi cho UID Elasticsearch, có đủ disk trước khi snapshot.
+- Elasticsearch snapshot qua repository `fs` có path thuộc `/snapshots` (named volume). Script xuất **toàn bộ thư mục snapshot repository** bằng `docker compose cp` ra thư mục backup. Compose có service `snapshot-init` một lần để tạo thư mục repository và cấp quyền ghi cho UID Elasticsearch 1000. Nếu backup vẫn báo permission denied, kiểm tra log `snapshot-init`, quyền volume và dung lượng đĩa; không chmod cả host. Phải có đủ disk trước khi snapshot.
 - Backup nằm mặc định trong `~/siem-backups/siem-<UTC-timestamp>/` với quyền riêng tư. **Sao chép sang ổ/địa điểm khác**: backup trên cùng VPS không bảo vệ được khi ổ đĩa/VPS hỏng.
 - Repository Elasticsearch có thể tích lũy nhiều snapshots; lên lịch retention sau khi đã có phương án khôi phục được kiểm chứng. Tuyệt đối không xóa file riêng lẻ trong repository snapshot; xóa snapshot bằng API Elasticsearch theo quy trình.
 - Khôi phục chỉ nên thử trên một Compose project/VPS **cô lập**, không restore trực tiếp đè production. Có thể dùng `scripts/restore-drill.mjs` trên test stack tương ứng để đo tính toàn vẹn; kiểm tra số tài sản và sự kiện đã index.
