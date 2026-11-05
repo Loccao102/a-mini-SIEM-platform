@@ -61,7 +61,7 @@ flowchart TD
 * **Log Ingest Buffer**: Redis 7 (Redis Streams, Memory Cap, Backpressure protection).
 * **Storage & Search**: Elasticsearch 8 (Daily Index Partitioning, Best Compression, ILM Retention).
 * **Relational DB**: PostgreSQL 17 (Advisory Locks, Atomic Receipts, RBAC, SOAR State).
-* **Containerization**: Docker Compose (Tối ưu hóa tổng RAM toàn bộ hệ thống < 1GB).
+* **Containerization**: Docker Compose; VPS production khuyến nghị RAM tối thiểu 4 GB, SSD 40 GB trở lên.
 
 ---
 
@@ -69,7 +69,7 @@ flowchart TD
 
 ### 1. Yêu cầu hệ thống
 * Đã cài đặt **Docker** và **Docker Compose**.
-* RAM tối thiểu: **2 GB** (Khuyến nghị 4 GB).
+* Môi trường develop: khuyến nghị **4 GB RAM**; production preflight chặn dưới 3 GiB, khuyến nghị 4–8 GiB RAM.
 
 ### 2. Khởi động toàn bộ hệ thống
 ```bash
@@ -93,20 +93,20 @@ Hệ thống trả về HTTP 200 `{"status":"healthy"}` cho toàn bộ 6 subsyst
 
 ---
 
-## Triển khai VPS an toàn (production readiness)
+## Triển khai VPS với Caddy HTTPS và kiểm tra sau deploy
 
-Các container PostgreSQL, Redis, Elasticsearch, Backend, Frontend, Beats và Fleet mặc định **chỉ bind 127.0.0.1 trên host**. Điều này ngăn vô tình mở cổng DB và API trực tiếp ra Internet. Truy cập từ thiết bị bên ngoài cần một reverse proxy HTTPS, DNS và firewall được cấu hình đúng.
+Xem hướng dẫn theo từng bước tại **[ops/DEPLOY_VPS.md](ops/DEPLOY_VPS.md)**. Cấu hình này dành cho một VPS Linux; tất cả port PostgreSQL, Redis, Elasticsearch, API và frontend giữ loopback, chỉ Caddy mở cổng 80/443.
 
-1. Sao chép file mẫu: cp .env.production.example .env.production
-2. Tạo POSTGRES_PASSWORD và ADMIN_PASSWORD khác nhau, tối thiểu 16 ký tự, và JWT_SECRET dài tối thiểu 32 ký tự; không dùng mật khẩu mặc định hay commit secret lên Git.
-3. Đặt NEXT_PUBLIC_API_URL thành URL HTTPS của reverse proxy (ví dụ https://siem.example.org/api). Cấu hình proxy chuyển tiếp tới localhost:8080; web tới localhost:3000. Thiết lập TLS, CORS và firewall trên VPS. Biến NEXT_PUBLIC_API_URL được đóng gói lúc build Next.js; sau khi đổi URL phải chạy docker compose --env-file .env.production up -d --build frontend để build lại.
-4. Chạy kiểm tra trước khi khởi động: node scripts/production-preflight.mjs --env .env.production
-5. Khởi động: docker compose --env-file .env.production up -d --build
-6. Kiểm tra: docker compose ps; curl http://127.0.0.1:8080/healthz; xác nhận từ Internet chỉ cổng 443 của proxy được truy cập.
+1. Trỏ DNS `siem.example.org` đến IP VPS, mở firewall 80/443 và SSH cho IP quản trị.
+2. `cp .env.production.example .env.production && chmod 600 .env.production`
+3. Điền `SIEM_DOMAIN=siem.example.org`, `ACME_EMAIL`, `NEXT_PUBLIC_API_URL=https://siem.example.org` (**không thêm `/api`**), cùng ba secret ngẫu nhiên mạnh.
+4. Chạy `node scripts/vps-release.mjs --env .env.production` để xem dry-run.
+5. Khi hạ tầng đã sẵn sàng, chạy `node scripts/vps-release.mjs --env .env.production --apply` để kiểm tra preflight, Caddy, khởi động Compose và thử smoke qua HTTPS.
+6. Sao lưu: `node scripts/vps-backup.mjs --env .env.production --apply`. Script xuất PostgreSQL dump và repository snapshot Elasticsearch, cần sao chép backup ra ngoài VPS và thử restore riêng.
 
-Preflight kiểm tra chế độ production, mật khẩu/secret, HTTPS API URL, bind host các dịch vụ dữ liệu, RAM (tối thiểu 3 GiB) và dung lượng trống (tối thiểu 8 GiB). Secret không được in ra log. Đây là **bước kiểm tra trước triển khai**, không tự cài SSL, tạo domain, sửa firewall, cài Redis/Elasticsearch hay thay thế kiểm thử tải, khôi phục dữ liệu.
+**Không triển khai tự động chỉ bằng push/PR.** Cần một người vận hành thực hiện lệnh `--apply` trên đúng VPS. Các script không gọi `down -v`, không xóa named volume. `ingest` chỉ là công cụ CLI đọc stdin nên được tách vào profile `manual-tools`, không chạy nền hay restart liên tục.
 
-Không sử dụng các tài khoản hoặc mật khẩu dev mặc định trên hệ thống có Internet. Theo dõi dung lượng index và xây dựng chính sách backup/restore trước khi lưu log thật.
+Thông tin `NEXT_PUBLIC_API_URL` bị đóng gói vào frontend khi build; khi đổi hostname phải build lại frontend. `POSTGRES_PASSWORD` phải là ký tự URL-safe vì Docker Compose hiện nhúng trực tiếp vào PostgreSQL DSN. Không nên thay mật khẩu PostgreSQL trong env sau khi đã tạo volume mà không đổi credential thực tế trong database.
 
 ---
 
