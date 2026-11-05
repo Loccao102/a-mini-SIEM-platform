@@ -11,6 +11,17 @@ permissions:
   contents: read
 
 jobs:
+  production-preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --test scripts/production-preflight.test.mjs
+      - run: node --check scripts/production-preflight.mjs
+      - run: docker compose config --quiet
+
   backend:
     runs-on: ubuntu-latest
     timeout-minutes: 15
