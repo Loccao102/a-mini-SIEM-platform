@@ -55,7 +55,7 @@ export function checkProductionConfig(env) {
   try{
     const url=new URL(apiUrl);
     if(url.protocol!=="https:"||url.username||url.password||url.port||
-       url.pathname!=="/"||url.search||url.hash||url.hostname!==domain){
+       url.pathname!=="/"||url.search||url.hash||url.hostname!==domain||url.origin!==apiUrl){
       errors.push("NEXT_PUBLIC_API_URL phải là https://SIEM_DOMAIN, KHÔNG thêm /api, port hoặc dấu / cuối.");
     }
   }catch{
