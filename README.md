@@ -84,12 +84,29 @@ Hệ thống trả về HTTP 200 `{"status":"healthy"}` cho toàn bộ 6 subsyst
 
 ### 3. Đăng nhập Web Dashboard
 * **Địa chỉ Web UI**: [http://localhost:3000](http://localhost:3000)
-* **Tài khoản SOC Admin mặc định**:
+* **Tài khoản SOC Admin mặc định khi develop**:
   * Email: `admin@example.com`
-  * Mật khẩu: `admin`
+  * Mật khẩu: `change-me-now` (giá trị mặc định trong Docker Compose; phải thay trước khi triển khai)
 * **Tài khoản Analyst**:
   * Email: `analyst@example.com`
   * Mật khẩu: `analyst`
+
+---
+
+## Triển khai VPS an toàn (production readiness)
+
+Các container PostgreSQL, Redis, Elasticsearch, Backend, Frontend, Beats và Fleet mặc định **chỉ bind 127.0.0.1 trên host**. Điều này ngăn vô tình mở cổng DB và API trực tiếp ra Internet. Truy cập từ thiết bị bên ngoài cần một reverse proxy HTTPS, DNS và firewall được cấu hình đúng.
+
+1. Sao chép file mẫu: cp .env.production.example .env.production
+2. Tạo POSTGRES_PASSWORD và ADMIN_PASSWORD khác nhau, tối thiểu 16 ký tự, và JWT_SECRET dài tối thiểu 32 ký tự; không dùng mật khẩu mặc định hay commit secret lên Git.
+3. Đặt NEXT_PUBLIC_API_URL thành URL HTTPS của reverse proxy (ví dụ https://siem.example.org/api). Cấu hình proxy chuyển tiếp tới localhost:8080; web tới localhost:3000. Thiết lập TLS, CORS và firewall trên VPS.
+4. Chạy kiểm tra trước khi khởi động: node scripts/production-preflight.mjs --env .env.production
+5. Khởi động: docker compose --env-file .env.production up -d --build
+6. Kiểm tra: docker compose ps; curl http://127.0.0.1:8080/healthz; xác nhận từ Internet chỉ cổng 443 của proxy được truy cập.
+
+Preflight kiểm tra chế độ production, mật khẩu/secret, HTTPS API URL, bind host các dịch vụ dữ liệu, RAM (tối thiểu 3 GiB) và dung lượng trống (tối thiểu 8 GiB). Secret không được in ra log. Đây là **bước kiểm tra trước triển khai**, không tự cài SSL, tạo domain, sửa firewall, cài Redis/Elasticsearch hay thay thế kiểm thử tải, khôi phục dữ liệu.
+
+Không sử dụng các tài khoản hoặc mật khẩu dev mặc định trên hệ thống có Internet. Theo dõi dung lượng index và xây dựng chính sách backup/restore trước khi lưu log thật.
 
 ---
 
