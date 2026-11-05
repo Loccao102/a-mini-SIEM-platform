@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/ingest"
@@ -140,10 +141,13 @@ func (h *HealthChecker) CheckRedis(ctx context.Context) ServiceHealth {
 	checks["ping"] = "ok"
 
 	// Check we can write/read
-	testKey := "health:test"
-	testValue := "health_check_" + fmt.Sprintf("%d", time.Now().UnixNano())
+	// Each concurrent probe gets its own key to avoid false failures caused by
+	// another health request overwriting the same value between SET and GET.
+	testKey := fmt.Sprintf("health:test:%d", time.Now().UnixNano())
+	testValue := "ok"
+	defer h.redis.Del(context.WithoutCancel(ctx), testKey)
 
-	err = h.redis.Set(ctx, testKey, testValue, 1*time.Second).Err()
+	err = h.redis.Set(ctx, testKey, testValue, 10*time.Second).Err()
 	if err != nil {
 		return ServiceHealth{
 			Status:       StatusUnhealthy,
@@ -390,16 +394,43 @@ func (h *HealthChecker) CheckDatabase(ctx context.Context) ServiceHealth {
 	}
 }
 
-// CheckAll performs all health checks
-func (h *HealthChecker) CheckAll(ctx context.Context) map[string]ServiceHealth {
-	return map[string]ServiceHealth{
-		"postgres":      h.CheckPostgres(ctx),
-		"redis":         h.CheckRedis(ctx),
-		"elasticsearch": h.CheckElasticsearch(ctx),
-		"database":      h.CheckDatabase(ctx),
-		"queues":        h.CheckQueueHealth(ctx),
-		"connectors":    h.CheckConnectorHealth(ctx),
+// healthTask makes independent probes run concurrently, bounded by the caller's
+// context. Results are written into separate slots to avoid concurrent map writes.
+type healthTask struct {
+	name string
+	check func(context.Context) ServiceHealth
+}
+
+func collectHealthChecks(ctx context.Context, tasks []healthTask) map[string]ServiceHealth {
+	results := make([]ServiceHealth, len(tasks))
+	var group sync.WaitGroup
+	group.Add(len(tasks))
+	for index, task := range tasks {
+		go func(i int, fn func(context.Context) ServiceHealth) {
+			defer group.Done()
+			results[i] = fn(ctx)
+		}(index, task.check)
 	}
+	group.Wait()
+	checks := make(map[string]ServiceHealth, len(tasks))
+	for i, task := range tasks {
+		checks[task.name] = results[i]
+	}
+	return checks
+}
+
+// CheckAll runs independent network probes in parallel, reducing latency from
+// the SUM of six probes to approximately the slowest probe. Each check shares
+// the request context so cancellations and timeouts still propagate.
+func (h *HealthChecker) CheckAll(ctx context.Context) map[string]ServiceHealth {
+	return collectHealthChecks(ctx, []healthTask{
+		{"postgres", h.CheckPostgres},
+		{"redis", h.CheckRedis},
+		{"elasticsearch", h.CheckElasticsearch},
+		{"database", h.CheckDatabase},
+		{"queues", h.CheckQueueHealth},
+		{"connectors", h.CheckConnectorHealth},
+	})
 }
 
 // IsHealthy returns true if all critical services are healthy
