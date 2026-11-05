@@ -7,7 +7,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-siem}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-siem_dev_password}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "${POSTGRES_BIND_HOST:-127.0.0.1}:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./backend/migrations:/docker-entrypoint-initdb.d:ro
@@ -22,7 +22,7 @@ services:
     mem_limit: 128m
     command: ["redis-server", "--appendonly", "yes"]
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - "${REDIS_BIND_HOST:-127.0.0.1}:${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -40,7 +40,7 @@ services:
       xpack.security.enabled: "false"
       ES_JAVA_OPTS: -Xms256m -Xmx384m
     ports:
-      - "${ELASTICSEARCH_PORT:-9200}:9200"
+      - "${ELASTICSEARCH_BIND_HOST:-127.0.0.1}:${ELASTICSEARCH_PORT:-9200}:9200"
     volumes:
       - elasticsearch_data:/usr/share/elasticsearch/data
       - elasticsearch_snapshots:/snapshots
@@ -72,7 +72,7 @@ services:
       PARSER_BATCH_SIZE: ${PARSER_BATCH_SIZE:-100}
       PARSER_WORKERS: ${PARSER_WORKERS:-4}
     ports:
-      - "${API_PORT:-8080}:8080"
+      - "${API_BIND_HOST:-127.0.0.1}:${API_PORT:-8080}:8080"
     depends_on:
       postgres:
         condition: service_healthy
@@ -93,7 +93,7 @@ services:
     volumes:
       - ./config/logstash-pipeline.conf:/usr/share/logstash/pipeline/logstash.conf:ro
     ports:
-      - "${BEATS_PORT:-5044}:5044"
+      - "${BEATS_BIND_HOST:-127.0.0.1}:${BEATS_PORT:-5044}:5044"
     depends_on:
       backend:
         condition: service_healthy
@@ -111,7 +111,7 @@ services:
       FLEET_SERVER_ELASTICSEARCH_HOST: "http://elasticsearch:9200"
       ELASTICSEARCH_HOSTS: "http://elasticsearch:9200"
     ports:
-      - "${FLEET_PORT:-8220}:8220"
+      - "${FLEET_BIND_HOST:-127.0.0.1}:${FLEET_PORT:-8220}:8220"
     depends_on:
       elasticsearch:
         condition: service_healthy
@@ -149,7 +149,7 @@ services:
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8080}
       NEXT_PUBLIC_MODE: ${MODE:-production}
     ports:
-      - "${FRONTEND_PORT:-3000}:3000"
+      - "${FRONTEND_BIND_HOST:-127.0.0.1}:${FRONTEND_PORT:-3000}:3000"
     depends_on:
       backend:
         condition: service_healthy
