@@ -164,13 +164,13 @@ func (handler *Handler) requireAdminHeader(next http.Handler) http.Handler {
 
 func (handler *Handler) requireRole(role string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		token, err := auth.Bearer(request.Header.Get("Authorization"))
-		if err != nil {
-			if qToken := request.URL.Query().Get("token"); qToken != "" {
-				token = qToken
-				err = nil
-			}
+		// JWT query parameters leak through browser history and reverse-proxy access logs.
+		// All authenticated routes now require Authorization: Bearer.
+		if request.URL.Query().Has("token") {
+			writeError(response, http.StatusUnauthorized, fmt.Errorf("query-string access tokens are disabled"))
+			return
 		}
+		token, err := auth.Bearer(request.Header.Get("Authorization"))
 		if err != nil {
 			writeError(response, http.StatusUnauthorized, err)
 			return
