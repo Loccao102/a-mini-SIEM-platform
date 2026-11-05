@@ -99,7 +99,7 @@ Các container PostgreSQL, Redis, Elasticsearch, Backend, Frontend, Beats và Fl
 
 1. Sao chép file mẫu: cp .env.production.example .env.production
 2. Tạo POSTGRES_PASSWORD và ADMIN_PASSWORD khác nhau, tối thiểu 16 ký tự, và JWT_SECRET dài tối thiểu 32 ký tự; không dùng mật khẩu mặc định hay commit secret lên Git.
-3. Đặt NEXT_PUBLIC_API_URL thành URL HTTPS của reverse proxy (ví dụ https://siem.example.org/api). Cấu hình proxy chuyển tiếp tới localhost:8080; web tới localhost:3000. Thiết lập TLS, CORS và firewall trên VPS.
+3. Đặt NEXT_PUBLIC_API_URL thành URL HTTPS của reverse proxy (ví dụ https://siem.example.org/api). Cấu hình proxy chuyển tiếp tới localhost:8080; web tới localhost:3000. Thiết lập TLS, CORS và firewall trên VPS. Biến NEXT_PUBLIC_API_URL được đóng gói lúc build Next.js; sau khi đổi URL phải chạy docker compose --env-file .env.production up -d --build frontend để build lại.
 4. Chạy kiểm tra trước khi khởi động: node scripts/production-preflight.mjs --env .env.production
 5. Khởi động: docker compose --env-file .env.production up -d --build
 6. Kiểm tra: docker compose ps; curl http://127.0.0.1:8080/healthz; xác nhận từ Internet chỉ cổng 443 của proxy được truy cập.
