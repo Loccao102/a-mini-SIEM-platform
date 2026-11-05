@@ -9,11 +9,18 @@ import (
 	"github.com/Loccao102/a-mini-SIEM-platform/backend/internal/health"
 )
 
-// HealthzResponse represents the response structure for health checks
+// HealthzResponse is intentionally safe for unauthenticated container probes.
 type HealthzResponse struct {
-	Status   string                          `json:"status"`
-	Uptime   string                          `json:"uptime"`
-	Services map[string]health.ServiceHealth `json:"services"`
+	Status string `json:"status"`
+	Uptime string `json:"uptime"`
+}
+
+// DetailedHealthResponse is restricted to authenticated SOC administrators.
+type DetailedHealthResponse struct {
+	Status    string                          `json:"status"`
+	Uptime    string                          `json:"uptime"`
+	CheckedAt time.Time                       `json:"checked_at"`
+	Services  map[string]health.ServiceHealth `json:"services"`
 }
 
 // MetricsResponse represents pipeline metrics
@@ -30,42 +37,52 @@ type DLQResponse struct {
 	Stats   map[string]interface{} `json:"stats"`
 }
 
-// handleHealthz handles GET /healthz requests
+func (h *Handler) uptime() string {
+	if h.startedAt.IsZero() {
+		return "unknown"
+	}
+	return time.Since(h.startedAt).Round(time.Second).String()
+}
+
+// handleHealthz is safe for unauthenticated load balancers and Docker.
+// It never returns service error messages, database schema details or host names.
 func (h *Handler) handleHealthz(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-
-	// Get overall health status
-	allChecks := h.healthChecker.CheckAll(ctx)
-	overallStatus := h.healthChecker.OverallStatus(ctx)
-
-	response := HealthzResponse{
-		Status:   string(overallStatus),
-		Uptime:   "TBD", // Would need to track in handler
-		Services: allChecks,
-	}
-
+	checks := h.healthChecker.CheckAll(r.Context())
+	status := health.OverallFromChecks(checks)
 	w.Header().Set("Content-Type", "application/json")
-
-	// Return 503 if unhealthy, 200 if healthy/degraded
-	if overallStatus == health.StatusUnhealthy {
+	w.Header().Set("Cache-Control", "no-store")
+	if status == health.StatusUnhealthy {
 		w.WriteHeader(http.StatusServiceUnavailable)
-	} else {
-		w.WriteHeader(http.StatusOK)
 	}
+	_ = json.NewEncoder(w).Encode(HealthzResponse{
+		Status: string(status), Uptime: h.uptime(),
+	})
+}
 
-	json.NewEncoder(w).Encode(response)
+// handleDetailedHealth executes the checks once per request. Route auth is admin-only.
+func (h *Handler) handleDetailedHealth(w http.ResponseWriter, r *http.Request) {
+	checks := h.healthChecker.CheckAll(r.Context())
+	status := health.OverallFromChecks(checks)
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	if status == health.StatusUnhealthy {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}
+	_ = json.NewEncoder(w).Encode(DetailedHealthResponse{
+		Status: string(status), Uptime: h.uptime(),
+		CheckedAt: time.Now().UTC(), Services: checks,
+	})
 }
 
 func (h *Handler) handleServiceHealth(check func(context.Context) health.ServiceHealth) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		result := check(r.Context())
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
 		if result.Status == health.StatusUnhealthy {
 			w.WriteHeader(http.StatusServiceUnavailable)
-		} else {
-			w.WriteHeader(http.StatusOK)
 		}
-		json.NewEncoder(w).Encode(result)
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": string(result.Status)})
 	}
 }
 
