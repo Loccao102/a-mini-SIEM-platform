@@ -170,3 +170,10 @@ Từ trang `/cases`, nút **Tải báo cáo Incident** giờ gọi API bằng `A
 Tất cả endpoint cần JWT không còn chấp nhận `?token=...`; token trong query có thể bị lưu vào lịch sử browser, log proxy và hệ thống phân tích. Mọi client/agent quản trị phải dùng header Authorization. API key ingest vẫn giữ cơ chế Bearer API key riêng. Đây là thay đổi tương thích API có chủ đích trước khi public dịch vụ lên VPS.
 
 Các giá trị động của báo cáo HTML (bao gồm severity, action type, status và CSS class priority) đã được escape để tránh chèn thẻ HTML khi dữ liệu case bị nhiễm ký tự không tin cậy.
+
+## Tối ưu bộ health check trên VPS
+
+- Sáu thành phần PostgreSQL, Redis, Elasticsearch, database schema, hàng đợi và connectors được kiểm tra **đồng thời** dưới cùng request context. Thời gian trả phản hồi phụ thuộc nhiều hơn vào service chậm nhất thay vì cộng dồn độ trễ sáu service. Không thêm cache hoặc thay đổi API health.
+- Redis sử dụng khóa thử đọc/ghi **riêng cho từng request**, TTL 10 giây và dọn dẹp có timeout, tránh race giữa nhiều lần kiểm tra /healthz hoặc /system.
+- Kiểm tra consumer group dùng một lượt XINFO GROUPS thay vì hai, đồng thời hiển thị đúng số consumer của parser thay vì lấy group đầu tiên bất kỳ.
+- Kiểm thử race trong CI gồm nhiều health probe Redis đồng thời và xác nhận CheckAll chạy đồng thời nhưng vẫn tổng hợp kết quả an toàn.
