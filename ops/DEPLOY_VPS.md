@@ -1,6 +1,6 @@
 # Mini-SIEM — checklist đưa lên VPS (01 node, HTTPS)
 
-**Phạm vi:** Một VPS Linux chạy Docker Compose: PostgreSQL, Redis, Elasticsearch, Go backend, ingest, Next.js frontend và Caddy. Tất cả dịch vụ ứng dụng/database bind 127.0.0.1 ở host; chỉ Caddy xuất bản 80/443. **Không chạy script này trên HABI hoặc máy chủ đang có dữ liệu SIEM do một Compose project khác quản lý mà chưa di chuyển volume.**
+**Phạm vi:** Một VPS Linux chạy Docker Compose: PostgreSQL, Redis, Elasticsearch, Go backend (bao gồm parser/ingest API), Next.js frontend và Caddy. Công cụ `ingest` đọc stdin thuộc profile `manual-tools`, không chạy nền. Tất cả dịch vụ ứng dụng/database bind 127.0.0.1 ở host; chỉ Caddy xuất bản 80/443. **Không chạy script này trên HABI hoặc máy chủ đang có dữ liệu SIEM do một Compose project khác quản lý mà chưa di chuyển volume.**
 
 ## 1. Hạ tầng và DNS
 
