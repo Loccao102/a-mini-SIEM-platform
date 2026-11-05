@@ -137,7 +137,8 @@ services:
     restart: unless-stopped
 
   ingest:
-    restart: unless-stopped
+    # One-shot stdin importer, NOT a background service.
+    profiles: ["manual-tools"]
     build: ./backend
     entrypoint: ["/siem-ingest"]
     mem_limit: 128m
