@@ -1,5 +1,6 @@
 services:
   postgres:
+    restart: unless-stopped
     image: postgres:17-alpine
     mem_limit: 256m
     environment:
@@ -18,6 +19,7 @@ services:
       retries: 5
 
   redis:
+    restart: unless-stopped
     image: redis:7-alpine
     mem_limit: 128m
     command: ["redis-server", "--appendonly", "yes"]
@@ -32,6 +34,7 @@ services:
       retries: 10
 
   elasticsearch:
+    restart: unless-stopped
     image: docker.elastic.co/elasticsearch/elasticsearch:8.19.0
     mem_limit: 768m
     environment:
@@ -52,6 +55,7 @@ services:
       start_period: 40s
 
   backend:
+    restart: unless-stopped
     build: ./backend
     mem_limit: 256m
     environment:
@@ -133,6 +137,7 @@ services:
     restart: unless-stopped
 
   ingest:
+    restart: unless-stopped
     build: ./backend
     entrypoint: ["/siem-ingest"]
     mem_limit: 128m
@@ -143,6 +148,7 @@ services:
         condition: service_healthy
 
   frontend:
+    restart: unless-stopped
     build:
       context: ./frontend
       args:
@@ -158,8 +164,32 @@ services:
       backend:
         condition: service_healthy
 
+  caddy:
+    image: caddy:2.10.2-alpine
+    profiles: ["production"]
+    restart: unless-stopped
+    environment:
+      SIEM_DOMAIN: ${SIEM_DOMAIN:-localhost}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./ops/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_started
+
+
 volumes:
   postgres_data:
   redis_data:
   elasticsearch_data:
   elasticsearch_snapshots:
+  caddy_data:
+  caddy_config:
