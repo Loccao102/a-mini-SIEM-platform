@@ -106,14 +106,14 @@ func (handler *Handler) Routes() http.Handler {
 	mux.Handle("POST /api/v1/soar/blocked/{id}/release", handler.requireRole("analyst", http.HandlerFunc(handler.soarReleaseBlocked)))
 
 	// Public health endpoints reveal status only. Detailed diagnostics require admin.
-	mux.Handle("GET /api/v1/system/health", handler.requireRole("admin", http.HandlerFunc(handler.handleDetailedHealth)))
+	mux.Handle("GET /api/v1/system/health", handler.requireAdminHeader(http.HandlerFunc(handler.handleDetailedHealth)))
 	mux.HandleFunc("GET /healthz", handler.handleHealthz)
 	mux.HandleFunc("GET /healthz/redis", handler.handleServiceHealth(handler.healthChecker.CheckRedis))
 	mux.HandleFunc("GET /healthz/queue", handler.handleServiceHealth(handler.healthChecker.CheckQueueHealth))
 	mux.HandleFunc("GET /healthz/ingest", handler.handleServiceHealth(handler.healthChecker.CheckQueueHealth))
 	mux.HandleFunc("GET /healthz/parser", handler.handleServiceHealth(handler.healthChecker.CheckConnectorHealth))
 	mux.HandleFunc("GET /healthz/elasticsearch", handler.handleServiceHealth(handler.healthChecker.CheckElasticsearch))
-	mux.Handle("GET /metrics", handler.requireRole("admin", http.HandlerFunc(handler.handleMetrics)))
+	mux.Handle("GET /metrics", handler.requireAdminHeader(http.HandlerFunc(handler.handleMetrics)))
 
 	// DLQ management endpoints
 	mux.Handle("GET /api/v1/dlq/stats", handler.requireRole("analyst", http.HandlerFunc(handler.handleDLQStats)))
@@ -144,6 +144,22 @@ func (handler *Handler) login(response http.ResponseWriter, request *http.Reques
 		return
 	}
 	writeJSON(response, http.StatusOK, map[string]any{"token": token, "user": map[string]any{"user_id": id, "email": email, "role": role}})
+}
+
+// Sensitive diagnostics never accept JWTs in URL query strings because access
+// logs, browser history and proxy metrics can expose them.
+func (handler *Handler) requireAdminHeader(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Query().Has("token") {
+			writeError(response, http.StatusUnauthorized, fmt.Errorf("use Authorization header; query tokens are not allowed"))
+			return
+		}
+		if _, err := auth.Bearer(request.Header.Get("Authorization")); err != nil {
+			writeError(response, http.StatusUnauthorized, err)
+			return
+		}
+		handler.requireRole("admin", next).ServeHTTP(response, request)
+	})
 }
 
 func (handler *Handler) requireRole(role string, next http.Handler) http.Handler {
