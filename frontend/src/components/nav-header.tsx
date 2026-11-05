@@ -94,6 +94,7 @@ export function NavHeader() {
             {label}
           </Link>
         ))}
+        {currentUser?.role==="admin"&&<Link className={pathname==="/system"?"active":""} href="/system"><span className="nav-icon" aria-hidden="true">◉</span> System Health</Link>}
       </nav>
 
       <div className="nav-user">

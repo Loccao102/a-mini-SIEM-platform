@@ -413,25 +413,28 @@ func (h *HealthChecker) IsHealthy(ctx context.Context) bool {
 	return true
 }
 
-// OverallStatus returns the worst status from all checks
-func (h *HealthChecker) OverallStatus(ctx context.Context) Status {
-	checks := h.CheckAll(ctx)
-	hasUnhealthy := false
+// OverallFromChecks determines system readiness from ONE already collected snapshot.
+// Unhealthy takes precedence over degraded, and an empty snapshot is unhealthy.
+func OverallFromChecks(checks map[string]ServiceHealth) Status {
+	if len(checks) == 0 {
+		return StatusUnhealthy
+	}
 	hasDegraded := false
-
 	for _, check := range checks {
-		if check.Status == StatusUnhealthy {
-			hasUnhealthy = true
-		} else if check.Status == StatusDegraded {
+		if check.Status == StatusUnhealthy || (check.Status != StatusHealthy && check.Status != StatusDegraded) {
+			return StatusUnhealthy
+		}
+		if check.Status == StatusDegraded {
 			hasDegraded = true
 		}
-	}
-
-	if hasUnhealthy {
-		return StatusUnhealthy
 	}
 	if hasDegraded {
 		return StatusDegraded
 	}
 	return StatusHealthy
+}
+
+// OverallStatus returns the worst status from all checks.
+func (h *HealthChecker) OverallStatus(ctx context.Context) Status {
+	return OverallFromChecks(h.CheckAll(ctx))
 }
