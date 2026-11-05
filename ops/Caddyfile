@@ -14,7 +14,7 @@
     X-Frame-Options "DENY"
   }
 
-  @api path /api/* /healthz /healthz/*
+  @api path /api/* /healthz /healthz/* /metrics
   handle @api {
     reverse_proxy backend:8080
   }
