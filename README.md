@@ -84,12 +84,15 @@ Hệ thống trả về HTTP 200 `{"status":"healthy"}` cho toàn bộ 6 subsyst
 
 ### 3. Đăng nhập Web Dashboard
 * **Địa chỉ Web UI**: [http://localhost:3000](http://localhost:3000)
-* **Tài khoản SOC Admin mặc định khi develop**:
-  * Email: `admin@example.com`
-  * Mật khẩu: `change-me-now` (giá trị mặc định trong Docker Compose; phải thay trước khi triển khai)
-* **Tài khoản Analyst**:
-  * Email: `analyst@example.com`
-  * Mật khẩu: `analyst`
+Các tài khoản demo được backend tự động seed khi khởi động với `MODE=develop` (Docker Compose mặc định là `develop`). Backend kiểm tra từng email và chỉ tạo tài khoản còn thiếu; không cần xóa volume PostgreSQL để seed lại.
+
+| Vai trò | Email | Mật khẩu mặc định |
+|---|---|---|
+| SOC Admin | `admin@example.com` | `change-me-now` |
+| Analyst | `analyst@example.com` | `analyst` |
+| Viewer | `viewer@example.com` | `viewer` |
+
+> **Lưu ý:** Đây là thông tin đăng nhập chỉ dành cho môi trường demo/local. Không sử dụng các mật khẩu này trên VPS hoặc production. Admin dùng `ADMIN_EMAIL` và `ADMIN_PASSWORD`; Analyst và Viewer là tài khoản mẫu chỉ được seed trong `MODE=develop`. Nếu tài khoản đã tồn tại, seed không ghi đè mật khẩu hiện tại.
 
 ---
 
