@@ -134,6 +134,55 @@ chmod +x ./scripts/simulate-attack.sh
 
 ---
 
+## 🧪 Dữ liệu Demo và kiểm thử nhanh
+
+Có thể tạo dữ liệu mẫu ngay trên máy Windows mà không cần cố tình đăng nhập sai hoặc tạo sự kiện bảo mật thật. Chế độ `-SendTestOnly` của Windows Agent gửi 3 bản ghi tổng hợp qua đúng luồng ingest của hệ thống.
+
+### 1. Bộ dữ liệu Windows Security mẫu
+
+| Event ID | Ý nghĩa | Dữ liệu demo |
+|---|---|---|
+| `4624` | Đăng nhập thành công | User hiện tại, địa chỉ nguồn `127.0.0.1` |
+| `4672` | Cấp quyền đặc biệt cho phiên đăng nhập | User hiện tại |
+| `4625` | Đăng nhập thất bại | User giả lập `test_unauthorized`, IP `192.168.1.100` |
+
+Ví dụ nội dung log được gửi:
+
+```text
+Event ID: 4624 An account was successfully logged on.
+Account Name: demo-user
+Source Network Address: 127.0.0.1
+
+Event ID: 4672 Special privileges assigned to new logon.
+Account Name: demo-user
+
+Event ID: 4625 An account failed to log on.
+Account Name: test_unauthorized
+Source Network Address: 192.168.1.100
+```
+
+Tên tài khoản thực tế trong bản ghi `4624` và `4672` được lấy từ tài khoản Windows đang chạy script.
+
+### 2. Gửi dữ liệu demo vào SIEM
+
+Khởi động Docker Compose trước, sau đó chạy PowerShell tại thư mục gốc repository:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\\scripts\\sentinel-windows-agent.ps1 -SiemUrl "http://localhost:8080" -Email "admin@example.com" -Password "change-me-now" -SendTestOnly
+```
+
+Nếu đã thay thông tin đăng nhập Admin, thay giá trị `-Email` và `-Password` tương ứng. Agent sẽ tự đăng ký endpoint, tạo ingest API key và gửi 3 log mẫu. API key được cache tại `scripts/.agent-credentials.json`; không commit hoặc chia sẻ file này.
+
+### 3. Kiểm tra kết quả trên Dashboard
+
+Sau khi gửi thành công:
+
+1. Mở **Assets** (`/assets`) và tìm máy Windows đang chạy agent.
+2. Mở **Events** (`/events`) để tìm các bản ghi `4624`, `4672`, `4625`.
+3. Kiểm tra hostname, agent ID và thời gian ingest để xác nhận log đã đi qua pipeline.
+
+> **Lưu ý:** Đây là dữ liệu tổng hợp phục vụ demo luồng thu thập và tìm kiếm log. Ba bản ghi kiểm thử không đại diện cho một cuộc tấn công hoàn chỉnh và không đảm bảo tạo Brute Force Alert. Muốn kiểm thử chuỗi phát hiện SSH Brute Force → đăng nhập thành công → nâng quyền và phản ứng SOAR, chạy riêng kịch bản mô phỏng tại mục **Kịch bản mô phỏng tấn công & SOAR 1-Click**.
+
 ## 💻 Biến Máy Trạm Thành Log Agent
 
 Để đẩy log bảo mật thực tế từ máy tính lên SIEM:
