@@ -1,7 +1,7 @@
 param (
     [string]$SiemUrl = "http://localhost:8080",
     [string]$Email = "admin@example.com",
-    [string]$Password = "admin",
+    [string]$Password = "change-me-now",
     [string]$AttackerIp = "198.51.100.42",
     [string]$TargetHost = "srv-prod-web01",
     [string]$TargetUser = "ubuntu"
