@@ -7,7 +7,7 @@ echo "================================================================="
 
 SIEM_URL="${SIEM_URL:-http://localhost:8080}"
 ADMIN_EMAIL="${ADMIN_EMAIL:-admin@example.com}"
-ADMIN_PASSWORD="${ADMIN_PASSWORD:-admin}"
+ADMIN_PASSWORD="${ADMIN_PASSWORD:-change-me-now}"
 ATTACKER_IP="198.51.100.42"
 TARGET_HOST="srv-prod-web01"
 TARGET_USER="ubuntu"

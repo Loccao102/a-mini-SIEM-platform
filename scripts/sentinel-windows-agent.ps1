@@ -1,7 +1,7 @@
 param (
     [string]$SiemUrl = "http://localhost:8080",
     [string]$Email = "admin@example.com",
-    [string]$Password = "admin",
+    [string]$Password = "change-me-now",
     [int]$PollIntervalSec = 5,
     [switch]$SendTestOnly
 )
