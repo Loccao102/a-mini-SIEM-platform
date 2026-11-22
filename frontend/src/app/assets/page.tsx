@@ -2,28 +2,39 @@
 
 import { useEffect, useState } from "react";
 import { Asset, ApiError, createAsset, getAssets } from "@/lib/api";
+import { SeverityBadge } from "@/components/severity-badge";
+import { MonitorIcon, PlusIcon, ServerIcon } from "@/components/ui/icons";
+import {
+  Button,
+  EmptyState,
+  KpiCard,
+  Notice,
+  PageHeader,
+  PageShell,
+  Panel,
+  StatusPill,
+} from "@/components/ui/primitives";
 
-function criticality_color(c: string) {
-  if (c === "critical") return "var(--coral)";
-  if (c === "high") return "var(--amber)";
-  if (c === "medium") return "var(--aqua)";
-  return "var(--acid)";
-}
-
-function osIcon(os: string) {
-  if (os === "windows") return "🪟";
-  if (os === "linux") return "🐧";
-  return "💻";
-}
+const PLATFORM_TABS = [
+  { key: "all", label: "Tất cả nền tảng" },
+  { key: "linux", label: "Linux" },
+  { key: "windows", label: "Windows" },
+] as const;
 
 export default function AssetsPage() {
   const [assets, setAssets] = useState<Asset[]>([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<"all" | "linux" | "windows">("all");
-  const [form, setForm] = useState({ hostname: "", ip_address: "", os_type: "linux", criticality: "medium", owner: "" });
+  const [form, setForm] = useState({
+    hostname: "",
+    ip_address: "",
+    os_type: "linux",
+    criticality: "medium",
+    owner: "",
+  });
   const [saving, setSaving] = useState(false);
-  const [formStatus, setFormStatus] = useState("");
+  const [formStatus, setFormStatus] = useState<{ text: string; tone: "success" | "error" } | null>(null);
 
   useEffect(() => {
     getAssets()
@@ -35,7 +46,7 @@ export default function AssetsPage() {
         if (err instanceof ApiError && err.status === 401) {
           setError("Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.");
         } else {
-          setError("Không thể tải danh sách assets. Kiểm tra kết nối Backend.");
+          setError("Không thể tải danh sách tài sản. Kiểm tra kết nối Backend.");
         }
         setLoading(false);
       });
@@ -44,14 +55,17 @@ export default function AssetsPage() {
   async function handleCreateAsset(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSaving(true);
-    setFormStatus("");
+    setFormStatus(null);
     try {
       await createAsset(form);
       setForm({ hostname: "", ip_address: "", os_type: "linux", criticality: "medium", owner: "" });
-      setFormStatus("Asset registered. It can now send logs.");
+      setFormStatus({ tone: "success", text: "Đã đăng ký tài sản thành công. Node có thể bắt đầu gửi log." });
       setAssets(await getAssets());
     } catch (err: unknown) {
-      setFormStatus(err instanceof ApiError ? err.message : "Could not register asset.");
+      setFormStatus({
+        tone: "error",
+        text: err instanceof ApiError ? err.message : "Không thể đăng ký tài sản.",
+      });
     } finally {
       setSaving(false);
     }
@@ -67,224 +81,179 @@ export default function AssetsPage() {
   };
 
   return (
-    <main className="account-shell">
-      <header className="account-header">
-        <span className="eyebrow">Infrastructure Inventory</span>
-        <h1>Asset Management</h1>
-        <p>
-          Theo dõi toàn bộ máy chủ và thiết bị đang gửi log về SIEM, phân loại mức độ nghiêm trọng và trạng thái hoạt động.
-        </p>
-      </header>
+    <PageShell>
+      <PageHeader
+        title="Asset Inventory"
+        description="Quản lý toàn bộ máy chủ và thiết bị gửi log về SIEM, phân loại mức độ trọng yếu và chủ sở hữu."
+        badge={<StatusPill tone="accent">{assets.length} thiết bị</StatusPill>}
+      />
 
-      <section className="data-page">
-        {/* Summary Cards */}
-        <div className="metrics" style={{ marginBottom: "2rem" }}>
-          <article>
-            <span>Total Assets</span>
-            <strong style={{ color: "var(--acid)" }}>{loading ? "-" : assets.length}</strong>
-            <small>Registered Nodes</small>
-          </article>
-          <article>
-            <span>Critical</span>
-            <strong style={{ color: "var(--coral)" }}>{loading ? "-" : critCounts.critical}</strong>
-            <small className="red">Highest Risk</small>
-          </article>
-          <article>
-            <span>High</span>
-            <strong style={{ color: "var(--amber)" }}>{loading ? "-" : critCounts.high}</strong>
-            <small>Elevated Risk</small>
-          </article>
-          <article>
-            <span>Medium / Low</span>
-            <strong style={{ color: "var(--aqua)" }}>{loading ? "-" : critCounts.medium + critCounts.low}</strong>
-            <small className="green">Monitored</small>
-          </article>
-        </div>
+      {/* 4-column KPI strip (fixes old 3-column overflow bug) */}
+      <section className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <KpiCard
+          label="Tổng tài sản"
+          value={loading ? "—" : assets.length}
+          subtext="Node đã đăng ký"
+          tone="accent"
+          icon={<ServerIcon size={16} />}
+        />
+        <KpiCard
+          label="Critical"
+          value={loading ? "—" : critCounts.critical}
+          subtext="Rủi ro cao nhất"
+          tone="critical"
+        />
+        <KpiCard
+          label="High"
+          value={loading ? "—" : critCounts.high}
+          subtext="Mức độ trọng yếu cao"
+          tone="high"
+        />
+        <KpiCard
+          label="Medium / Low"
+          value={loading ? "—" : critCounts.medium + critCounts.low}
+          subtext="Đang giám sát"
+          tone="success"
+        />
+      </section>
 
-        {/* Filter tabs */}
-        <div style={{ display: "flex", gap: "0.75rem", marginBottom: "1.5rem" }}>
-          {(["all", "linux", "windows"] as const).map((f) => (
-            <button
-              key={f}
-              onClick={() => setFilter(f)}
-              style={{
-                padding: "0.4rem 1rem",
-                borderRadius: "4px",
-                border: `1px solid ${filter === f ? "var(--acid)" : "var(--line)"}`,
-                background: filter === f ? "var(--acid)" : "transparent",
-                color: filter === f ? "var(--canvas)" : "var(--muted)",
-                fontFamily: "var(--font-mono)",
-                fontSize: "0.75rem",
-                cursor: "pointer",
-                textTransform: "uppercase",
-                letterSpacing: "0.05em",
-              }}
-            >
-              {f === "all" ? "All Platforms" : f === "linux" ? "🐧 Linux" : "🪟 Windows"}
-            </button>
-          ))}
-        </div>
-
-        <form onSubmit={handleCreateAsset} className="mb-6 grid grid-cols-1 gap-3 border border-[var(--line)] bg-[var(--surface)] p-4 md:grid-cols-5">
-          <input required placeholder="Hostname" value={form.hostname} onChange={(event) => setForm({ ...form, hostname: event.target.value })} />
-          <input placeholder="IP address" value={form.ip_address} onChange={(event) => setForm({ ...form, ip_address: event.target.value })} />
-          <select value={form.os_type} onChange={(event) => setForm({ ...form, os_type: event.target.value })}>
+      {/* Register New Asset */}
+      <Panel title="Đăng ký máy chủ / thiết bị mới">
+        <form onSubmit={handleCreateAsset} className="grid grid-cols-1 gap-3 md:grid-cols-12">
+          <input
+            className="soc-input md:col-span-3"
+            required
+            placeholder="Hostname (VD: web-prod-01)"
+            value={form.hostname}
+            onChange={(event) => setForm({ ...form, hostname: event.target.value })}
+          />
+          <input
+            className="soc-input font-mono md:col-span-2"
+            placeholder="Địa chỉ IP"
+            value={form.ip_address}
+            onChange={(event) => setForm({ ...form, ip_address: event.target.value })}
+          />
+          <select
+            className="soc-select md:col-span-2"
+            value={form.os_type}
+            onChange={(event) => setForm({ ...form, os_type: event.target.value })}
+          >
             <option value="linux">Linux</option>
             <option value="windows">Windows</option>
             <option value="generic">Generic</option>
           </select>
-          <select value={form.criticality} onChange={(event) => setForm({ ...form, criticality: event.target.value })}>
+          <select
+            className="soc-select md:col-span-2"
+            value={form.criticality}
+            onChange={(event) => setForm({ ...form, criticality: event.target.value })}
+          >
             <option value="low">Low</option>
             <option value="medium">Medium</option>
             <option value="high">High</option>
             <option value="critical">Critical</option>
           </select>
-          <input placeholder="Owner (optional)" value={form.owner} onChange={(event) => setForm({ ...form, owner: event.target.value })} />
-          <button disabled={saving} type="submit" className="btn-preset bg-[var(--acid)] font-bold text-[var(--canvas)] md:col-span-5">
-            {saving ? "Registering..." : "Register Asset"}
-          </button>
-          {formStatus && <p className="text-xs text-[var(--acid)] md:col-span-5">{formStatus}</p>}
+          <input
+            className="soc-input md:col-span-2"
+            placeholder="Chủ sở hữu (tùy chọn)"
+            value={form.owner}
+            onChange={(event) => setForm({ ...form, owner: event.target.value })}
+          />
+          <Button disabled={saving} type="submit" variant="primary" className="md:col-span-1">
+            <PlusIcon size={14} /> {saving ? "..." : "Thêm"}
+          </Button>
         </form>
-
-        {/* Error state */}
-        {error && (
-          <div
-            style={{
-              padding: "1rem 1.25rem",
-              background: "rgba(255,80,80,0.08)",
-              border: "1px solid var(--coral)",
-              borderRadius: "6px",
-              color: "var(--coral)",
-              fontFamily: "var(--font-mono)",
-              fontSize: "0.85rem",
-              marginBottom: "1.5rem",
-            }}
-          >
-            {error}
+        {formStatus && (
+          <div className="mt-3">
+            <Notice tone={formStatus.tone} onDismiss={() => setFormStatus(null)}>
+              {formStatus.text}
+            </Notice>
           </div>
         )}
+      </Panel>
 
-        {/* Loading state */}
-        {loading && !error && (
-          <p className="empty-state">Loading assets...</p>
-        )}
+      {error && <Notice tone="error">{error}</Notice>}
 
-        {/* Empty state */}
-        {!loading && !error && filtered.length === 0 && (
-          <p className="empty-state">No assets found. Register a machine before sending its first log.</p>
-        )}
-
-        {/* Asset Grid */}
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))",
-            gap: "1rem",
-          }}
-        >
-          {filtered.map((asset) => (
-            <article
-              key={asset.asset_id}
-              style={{
-                padding: "1.25rem",
-                border: "1px solid var(--line)",
-                borderLeft: `3px solid ${criticality_color(asset.criticality)}`,
-                background: "var(--surface)",
-                borderRadius: "6px",
-                display: "flex",
-                flexDirection: "column",
-                gap: "0.5rem",
-              }}
-            >
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
-                  <span style={{ fontSize: "1.4rem" }}>{osIcon(asset.os_type)}</span>
-                  <div>
-                    <div
-                      style={{
-                        fontFamily: "var(--font-mono)",
-                        fontWeight: 700,
-                        color: "var(--ink)",
-                        fontSize: "0.95rem",
-                      }}
-                    >
-                      {asset.hostname}
-                    </div>
-                    <div
-                      style={{
-                        fontFamily: "var(--font-mono)",
-                        fontSize: "0.75rem",
-                        color: "var(--muted)",
-                      }}
-                    >
-                      {asset.ip_address}
-                    </div>
-                  </div>
-                </div>
-                <span
-                  className={`severity ${asset.criticality}`}
-                  style={{ flexShrink: 0 }}
-                >
-                  {asset.criticality}
-                </span>
-              </div>
-
-              <div
-                style={{
-                  display: "flex",
-                  gap: "0.5rem",
-                  flexWrap: "wrap",
-                  marginTop: "0.25rem",
-                }}
+      {/* Asset List */}
+      <Panel
+        title={`Danh sách thiết bị (${filtered.length})`}
+        actions={
+          <div className="flex items-center gap-1 rounded-md border border-border bg-canvas p-0.5">
+            {PLATFORM_TABS.map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => setFilter(tab.key)}
+                className={`cursor-pointer rounded px-2.5 py-1 text-xs font-medium transition-colors ${
+                  filter === tab.key ? "bg-surface-raised text-ink" : "text-muted hover:text-ink"
+                }`}
               >
-                <span
-                  style={{
-                    padding: "0.2rem 0.6rem",
-                    background: "var(--canvas)",
-                    border: "1px solid var(--line)",
-                    borderRadius: "4px",
-                    fontFamily: "var(--font-mono)",
-                    fontSize: "0.7rem",
-                    color: "var(--muted)",
-                    textTransform: "uppercase",
-                  }}
-                >
-                  {asset.os_type}
-                </span>
-                <span
-                  style={{
-                    padding: "0.2rem 0.6rem",
-                    background: "var(--canvas)",
-                    border: "1px solid var(--line)",
-                    borderRadius: "4px",
-                    fontFamily: "var(--font-mono)",
-                    fontSize: "0.7rem",
-                    color: "var(--acid)",
-                  }}
-                >
-                  ● Active
-                </span>
-              </div>
-
-              <div
-                style={{
-                  fontFamily: "var(--font-mono)",
-                  fontSize: "0.75rem",
-                  color: "var(--muted)",
-                  borderTop: "1px solid var(--line)",
-                  paddingTop: "0.5rem",
-                  marginTop: "0.25rem",
-                }}
-              >
-                Owner: <span style={{ color: "var(--ink)" }}>{asset.owner ?? "Unassigned"}</span>
-                {asset.created_at && (
-                  <> · Registered: {new Date(asset.created_at).toLocaleDateString()}</>
-                )}
-              </div>
-            </article>
-          ))}
-        </div>
-      </section>
-    </main>
+                {tab.label}
+              </button>
+            ))}
+          </div>
+        }
+        noPadding
+      >
+        {loading && !error ? (
+          <div className="p-8 text-center font-mono text-xs text-faint">Đang tải danh sách tài sản...</div>
+        ) : filtered.length === 0 ? (
+          <EmptyState
+            title="Chưa có tài sản nào phù hợp"
+            description="Đăng ký máy chủ mới ở biểu mẫu phía trên trước khi gửi log."
+            icon={<ServerIcon size={18} />}
+          />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead>
+                <tr className="border-b border-border bg-surface-raised/60 font-mono text-[11px] uppercase tracking-wider text-muted">
+                  <th className="px-5 py-3">Hostname & IP</th>
+                  <th className="px-4 py-3">Hệ điều hành</th>
+                  <th className="px-4 py-3">Mức độ trọng yếu</th>
+                  <th className="px-4 py-3">Chủ sở hữu</th>
+                  <th className="px-5 py-3 text-right">Trạng thái</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {filtered.map((asset) => (
+                  <tr key={asset.asset_id} className="transition-colors hover:bg-surface-hover/60">
+                    <td className="px-5 py-3.5">
+                      <div className="flex items-center gap-2.5">
+                        <span className="flex h-7 w-7 items-center justify-center rounded-md border border-border bg-canvas text-muted">
+                          {asset.os_type === "windows" ? <MonitorIcon size={14} /> : <ServerIcon size={14} />}
+                        </span>
+                        <div>
+                          <p className="font-mono font-semibold text-ink">{asset.hostname}</p>
+                          <p className="font-mono text-[11px] text-faint">{asset.ip_address || "—"}</p>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3.5 whitespace-nowrap">
+                      <StatusPill tone="neutral">{asset.os_type.toUpperCase()}</StatusPill>
+                    </td>
+                    <td className="px-4 py-3.5 whitespace-nowrap">
+                      <SeverityBadge severity={asset.criticality} />
+                    </td>
+                    <td className="px-4 py-3.5 text-ink-secondary">
+                      <span>{asset.owner || "Chưa gán"}</span>
+                      {asset.created_at && (
+                        <span className="block font-mono text-[11px] text-faint">
+                          Đăng ký: {new Date(asset.created_at).toLocaleDateString("vi-VN")}
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-5 py-3.5 text-right whitespace-nowrap">
+                      <StatusPill tone="success">
+                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> Active
+                      </StatusPill>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Panel>
+    </PageShell>
   );
 }
