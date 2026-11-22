@@ -1,8 +1,10 @@
 "use client";
 
-import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 import { createRule, deleteRule, getRules, Rule, testRegex } from "@/lib/api";
+import { SeverityBadge } from "@/components/severity-badge";
+import { FlaskIcon, PlusIcon, ShieldAlertIcon, TrashIcon } from "@/components/ui/icons";
+import { Button, EmptyState, Notice, PageHeader, PageShell, Panel, StatusPill } from "@/components/ui/primitives";
 
 const initialForm = {
   name: "",
@@ -40,7 +42,7 @@ const RULE_PRESETS = [
   },
   {
     name: "Web Directory Traversal / LFI",
-    pattern: "(?i)(\\.\\./|\\.\\.\\\|/etc/passwd|/proc/self|\\.env|web\\.config)",
+    pattern: "(?i)(\\.\\./|\\.\\.\\\\|/etc/passwd|/proc/self|\\.env|web\\.config)",
     target: "message",
     severity: "high",
     category: "web_attack",
@@ -98,20 +100,24 @@ const RULE_PRESETS = [
 export default function RulesPage() {
   const [rules, setRules] = useState<Rule[]>([]);
   const [form, setForm] = useState(initialForm);
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useState<{ text: string; tone: "error" | "success" } | null>(null);
 
   // Sandbox state
   const [sandboxLog, setSandboxLog] = useState("Failed password for root from 192.168.1.105 port 54322 ssh2");
-  const [sandboxPattern, setSandboxPattern] = useState("Failed password for (?:invalid user )?(\\S+) from (\\S+) port (\\d+)");
+  const [sandboxPattern, setSandboxPattern] = useState(
+    "Failed password for (?:invalid user )?(\\S+) from (\\S+) port (\\d+)"
+  );
   const [sandboxTarget, setSandboxTarget] = useState("message");
-  const [sandboxResult, setSandboxResult] = useState<{ matched: boolean; groups: string[]; error?: string } | null>(null);
+  const [sandboxResult, setSandboxResult] = useState<{ matched: boolean; groups: string[]; error?: string } | null>(
+    null
+  );
   const [testingSandbox, setTestingSandbox] = useState(false);
 
   async function loadRules() {
     try {
       setRules(await getRules());
     } catch {
-      setMessage("Không thể tải danh sách luật. Hãy đăng nhập tài khoản có quyền xem/admin.");
+      setMessage({ tone: "error", text: "Không thể tải danh sách luật. Kiểm tra quyền truy cập." });
     }
   }
 
@@ -140,20 +146,20 @@ export default function RulesPage() {
         condition,
       });
       setForm(initialForm);
-      setMessage("Đã tạo luật thành công.");
+      setMessage({ tone: "success", text: "Đã lưu quy tắc phát hiện mới vào hệ thống." });
       await loadRules();
     } catch {
-      setMessage("Không thể tạo luật. Kiểm tra quyền Admin.");
+      setMessage({ tone: "error", text: "Không thể tạo luật. Yêu cầu quyền Admin." });
     }
   }
 
   async function remove(id: number) {
-    if (!window.confirm("Xóa luật này?")) return;
+    if (!window.confirm("Xóa quy tắc phát hiện này?")) return;
     try {
       await deleteRule(id);
       await loadRules();
     } catch {
-      setMessage("Không thể xóa luật. Yêu cầu quyền Admin.");
+      setMessage({ tone: "error", text: "Không thể xóa luật. Yêu cầu quyền Admin." });
     }
   }
 
@@ -188,193 +194,242 @@ export default function RulesPage() {
   }
 
   return (
-    <main className="account-shell">
-      <header className="account-header">
-        <Link href="/">← Overview</Link>
-        <span className="eyebrow">Detection logic & Sandbox</span>
-        <h1>Detection Rules</h1>
-        <p>Định nghĩa các mẫu nhận diện MITRE ATT&CK và thử nghiệm Regular Expression trước khi áp dụng.</p>
-      </header>
+    <PageShell>
+      <PageHeader
+        title="Detection Rules"
+        description="Quản lý tập luật phát hiện theo MITRE ATT&CK và kiểm thử biểu thức Regex trực tiếp trên Sandbox."
+        badge={<StatusPill tone="accent">{rules.length} luật hoạt động</StatusPill>}
+      />
 
-      <section className="account-grid">
-        <div>
-          {/* 1-Click Presets */}
-          <div className="mb-6 p-4 border border-[var(--line)] bg-[var(--surface)] rounded">
-            <span className="block text-xs font-mono text-[var(--acid)] uppercase tracking-wider mb-2">
-              ⚡ 1-Click Rule Presets (MITRE ATT&CK)
-            </span>
-            <div className="presets-group">
+      {message && (
+        <Notice tone={message.tone} onDismiss={() => setMessage(null)}>
+          {message.text}
+        </Notice>
+      )}
+
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-12">
+        {/* Left Column: Presets + Create Form + Sandbox */}
+        <div className="space-y-6 xl:col-span-5">
+          <Panel title="Mẫu quy tắc nhanh (MITRE ATT&CK)" subtitle="Nạp sẵn mẫu vào biểu mẫu và Regex Sandbox">
+            <div className="flex flex-wrap gap-2">
               {RULE_PRESETS.map((preset) => (
-                <button
-                  key={preset.name}
-                  type="button"
-                  onClick={() => applyPreset(preset)}
-                  className="btn-preset"
-                  title={`Nạp preset: ${preset.name}`}
-                >
-                  + {preset.name}
-                </button>
+                <Button key={preset.name} size="sm" onClick={() => applyPreset(preset)}>
+                  <PlusIcon size={12} /> {preset.name}
+                </Button>
               ))}
             </div>
-          </div>
+          </Panel>
 
-          {/* Rule Creation Form */}
-          <form className="account-form" onSubmit={submit}>
-            <h2>Thêm luật mới</h2>
-            <label>
-              Tên luật (Name)
-              <input required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
-            </label>
-
-            <label>
-              Biểu thức Regex (Regex Pattern)
-              <input
-                required
-                value={form.regex_pattern}
-                onChange={(event) => setForm({ ...form, regex_pattern: event.target.value })}
-              />
-            </label>
-
-            <label>
-              Trường kiểm tra (Target field)
-              <select
-                value={form.target_field}
-                onChange={(event) => setForm({ ...form, target_field: event.target.value })}
-              >
-                <option value="message">Message (Nội dung log thô)</option>
-                <option value="hostname">Hostname</option>
-                <option value="username">Username</option>
-                <option value="src_ip">Source IP</option>
-                <option value="event_type">Event Type</option>
-                <option value="log_category">Log Category</option>
-              </select>
-            </label>
-
-            <label>
-              Độ nghiêm trọng (Severity)
-              <select value={form.severity} onChange={(event) => setForm({ ...form, severity: event.target.value })}>
-                <option value="info">Info</option>
-                <option value="low">Low</option>
-                <option value="medium">Medium</option>
-                <option value="high">High</option>
-                <option value="critical">Critical</option>
-              </select>
-            </label>
-
-            <label>
-              Phân loại (Category)
-              <input required value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })} />
-            </label>
-
-            <div className="grid grid-cols-2 gap-4 mt-2">
-              <label>
-                Ngưỡng lặp (Count)
+          <Panel title="Tạo quy tắc phát hiện mới">
+            <form className="space-y-3.5" onSubmit={submit}>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-ink-secondary">Tên quy tắc</label>
                 <input
-                  type="number"
-                  min={1}
-                  value={form.conditionCount}
-                  onChange={(event) => setForm({ ...form, conditionCount: Number(event.target.value) })}
+                  className="soc-input"
+                  required
+                  placeholder="VD: SSH Brute Force Attack"
+                  value={form.name}
+                  onChange={(event) => setForm({ ...form, name: event.target.value })}
                 />
-              </label>
-              <label>
-                Window (Giây)
-                <input
-                  type="number"
-                  min={0}
-                  value={form.conditionWindow}
-                  onChange={(event) => setForm({ ...form, conditionWindow: Number(event.target.value) })}
-                />
-              </label>
-            </div>
-
-            <label>
-              Cooldown Period (Giây)
-              <input
-                type="number"
-                min={0}
-                value={form.conditionCooldown}
-                onChange={(event) => setForm({ ...form, conditionCooldown: Number(event.target.value) })}
-              />
-            </label>
-
-            <button type="submit">Lưu Rule vào Hệ thống</button>
-            {message && <small className="notice block">{message}</small>}
-          </form>
-
-          {/* Interactive Regex Sandbox */}
-          <div className="sandbox-box">
-            <h3 className="sandbox-title">🧪 Interactive Regex Sandbox</h3>
-            <p className="text-xs text-[var(--muted)] mb-4">
-              Dán chuỗi log mẫu để kiểm tra khả năng khớp và bóc tách Capture Groups trước khi lưu.
-            </p>
-
-            <label className="block text-xs font-mono text-[var(--muted)] uppercase mb-2">Log Mẫu (Sample Log)</label>
-            <input
-              className="w-full mb-3"
-              value={sandboxLog}
-              onChange={(e) => setSandboxLog(e.target.value)}
-              placeholder="Dán dòng log kiểm thử vào đây..."
-            />
-
-            <label className="block text-xs font-mono text-[var(--muted)] uppercase mb-2">Regex Test Pattern</label>
-            <input
-              className="w-full mb-3"
-              value={sandboxPattern}
-              onChange={(e) => setSandboxPattern(e.target.value)}
-              placeholder="Nhập biểu thức regex..."
-            />
-
-            <button type="button" onClick={handleTestRegex} disabled={testingSandbox} className="btn-preset bg-[var(--acid)] text-[var(--canvas)] font-bold">
-              {testingSandbox ? "Testing..." : "🔍 Test Match Now"}
-            </button>
-
-            {sandboxResult && (
-              <div className="mt-4">
-                {sandboxResult.error ? (
-                  <span className="match-badge match-fail">Error: {sandboxResult.error}</span>
-                ) : sandboxResult.matched ? (
-                  <div>
-                    <span className="match-badge match-success">✔ MATCH FOUND (MATCH SUCCESS)</span>
-                    <div className="groups-list">
-                      <strong>Captured Groups ({sandboxResult.groups.length}):</strong>
-                      {sandboxResult.groups.map((group, idx) => (
-                        <div key={idx} className="mt-1">
-                          <span className="text-[var(--aqua)] font-bold">Group {idx}:</span>{" "}
-                          <code>{group || "(empty)"}</code>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : (
-                  <span className="match-badge match-fail">✖ NO MATCH FOUND</span>
-                )}
               </div>
-            )}
-          </div>
+
+              <div>
+                <label className="mb-1 block text-xs font-medium text-ink-secondary">Biểu thức Regex</label>
+                <input
+                  className="soc-input font-mono text-xs"
+                  required
+                  placeholder="(?i)(Failed password|authentication failure)"
+                  value={form.regex_pattern}
+                  onChange={(event) => setForm({ ...form, regex_pattern: event.target.value })}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-ink-secondary">Trường kiểm tra</label>
+                  <select
+                    className="soc-select"
+                    value={form.target_field}
+                    onChange={(event) => setForm({ ...form, target_field: event.target.value })}
+                  >
+                    <option value="message">message</option>
+                    <option value="hostname">hostname</option>
+                    <option value="username">username</option>
+                    <option value="src_ip">src_ip</option>
+                    <option value="event_type">event_type</option>
+                    <option value="log_category">log_category</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-ink-secondary">Mức độ nghiêm trọng</label>
+                  <select
+                    className="soc-select"
+                    value={form.severity}
+                    onChange={(event) => setForm({ ...form, severity: event.target.value })}
+                  >
+                    <option value="info">Info</option>
+                    <option value="low">Low</option>
+                    <option value="medium">Medium</option>
+                    <option value="high">High</option>
+                    <option value="critical">Critical</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs font-medium text-ink-secondary">Phân loại (Category)</label>
+                <input
+                  className="soc-input font-mono text-xs"
+                  required
+                  value={form.category}
+                  onChange={(event) => setForm({ ...form, category: event.target.value })}
+                />
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-ink-secondary">Ngưỡng (Count)</label>
+                  <input
+                    className="soc-input font-mono"
+                    type="number"
+                    min={1}
+                    value={form.conditionCount}
+                    onChange={(event) => setForm({ ...form, conditionCount: Number(event.target.value) })}
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-ink-secondary">Window (s)</label>
+                  <input
+                    className="soc-input font-mono"
+                    type="number"
+                    min={0}
+                    value={form.conditionWindow}
+                    onChange={(event) => setForm({ ...form, conditionWindow: Number(event.target.value) })}
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-ink-secondary">Cooldown (s)</label>
+                  <input
+                    className="soc-input font-mono"
+                    type="number"
+                    min={0}
+                    value={form.conditionCooldown}
+                    onChange={(event) => setForm({ ...form, conditionCooldown: Number(event.target.value) })}
+                  />
+                </div>
+              </div>
+
+              <Button type="submit" variant="primary" className="w-full">
+                Lưu quy tắc vào hệ thống
+              </Button>
+            </form>
+          </Panel>
+
+          <Panel
+            title="Regex Sandbox"
+            subtitle="Kiểm thử khớp mẫu và bóc tách Capture Groups trước khi kích hoạt"
+            actions={<FlaskIcon size={15} className="text-accent" />}
+          >
+            <div className="space-y-3">
+              <div>
+                <label className="mb-1 block text-xs font-medium text-ink-secondary">Dòng log mẫu</label>
+                <input
+                  className="soc-input font-mono text-xs"
+                  value={sandboxLog}
+                  onChange={(e) => setSandboxLog(e.target.value)}
+                  placeholder="Dán dòng log kiểm thử..."
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-ink-secondary">Biểu thức kiểm thử</label>
+                <input
+                  className="soc-input font-mono text-xs"
+                  value={sandboxPattern}
+                  onChange={(e) => setSandboxPattern(e.target.value)}
+                  placeholder="Nhập Regex..."
+                />
+              </div>
+              <Button variant="secondary" onClick={handleTestRegex} disabled={testingSandbox}>
+                {testingSandbox ? "Đang kiểm thử..." : "Chạy kiểm thử Regex"}
+              </Button>
+
+              {sandboxResult && (
+                <div className="rounded-lg border border-border bg-canvas p-3 text-xs">
+                  {sandboxResult.error ? (
+                    <StatusPill tone="danger">Lỗi: {sandboxResult.error}</StatusPill>
+                  ) : sandboxResult.matched ? (
+                    <div className="space-y-2">
+                      <StatusPill tone="success">Khớp mẫu thành công</StatusPill>
+                      <div className="space-y-1 font-mono text-[11px]">
+                        <p className="text-muted">Capture Groups ({sandboxResult.groups.length}):</p>
+                        {sandboxResult.groups.map((group, idx) => (
+                          <div key={idx} className="text-ink-secondary">
+                            <span className="text-accent">Group {idx}:</span>{" "}
+                            <code>{group || "(empty)"}</code>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <StatusPill tone="danger">Không khớp mẫu</StatusPill>
+                  )}
+                </div>
+              )}
+            </div>
+          </Panel>
         </div>
 
-        {/* Active Rules List */}
-        <section className="account-list">
-          <div className="list-heading">
-            <h2>Tập luật kích hoạt ({rules.length})</h2>
-          </div>
-          {!rules.length && <p className="empty-state">Chưa có luật nào được lưu.</p>}
-          {rules.map((rule) => (
-            <div className="data-row" key={rule.rule_id}>
-              <div>
-                <strong>{rule.name}</strong>
-                <small className="block mt-1">
-                  Trường <code>{rule.target_field}</code> matches <code>/{rule.regex_pattern}/</code> · {rule.category} ·{" "}
-                  <span className={`severity ${rule.severity}`}>{rule.severity}</span>
-                </small>
+        {/* Right Column: Active Rules Table */}
+        <div className="xl:col-span-7">
+          <Panel title={`Tập luật đang kích hoạt (${rules.length})`} noPadding>
+            {rules.length === 0 ? (
+              <EmptyState
+                title="Chưa có quy tắc nào được lưu"
+                description="Chọn một mẫu MITRE ATT&CK ở cột trái hoặc tự định nghĩa quy tắc mới."
+                icon={<ShieldAlertIcon size={18} />}
+              />
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-border bg-surface-raised/60 font-mono text-[11px] uppercase tracking-wider text-muted">
+                      <th className="px-5 py-3">Mức độ</th>
+                      <th className="px-4 py-3">Quy tắc & Biểu thức</th>
+                      <th className="px-4 py-3">Phân loại</th>
+                      <th className="px-5 py-3 text-right">Thao tác</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {rules.map((rule) => (
+                      <tr key={rule.rule_id} className="transition-colors hover:bg-surface-hover/60">
+                        <td className="px-5 py-3.5 whitespace-nowrap">
+                          <SeverityBadge severity={rule.severity} />
+                        </td>
+                        <td className="px-4 py-3.5">
+                          <p className="font-medium text-ink">{rule.name}</p>
+                          <p className="mt-1 font-mono text-[11px] text-muted break-all">
+                            <span className="text-accent">{rule.target_field}</span> =~{" "}
+                            <span className="text-ink-secondary">/{rule.regex_pattern}/</span>
+                          </p>
+                        </td>
+                        <td className="px-4 py-3.5 whitespace-nowrap">
+                          <StatusPill tone="neutral">{rule.category}</StatusPill>
+                        </td>
+                        <td className="px-5 py-3.5 text-right whitespace-nowrap">
+                          <Button variant="danger" size="sm" onClick={() => void remove(rule.rule_id)}>
+                            <TrashIcon size={13} /> Xóa
+                          </Button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
-              <button className="disable" onClick={() => void remove(rule.rule_id)}>
-                Xóa
-              </button>
-            </div>
-          ))}
-        </section>
-      </section>
-    </main>
+            )}
+          </Panel>
+        </div>
+      </div>
+    </PageShell>
   );
 }

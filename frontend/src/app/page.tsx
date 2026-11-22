@@ -5,13 +5,15 @@ import { useEffect, useState } from "react";
 import { Alert, AnalyticsData, ApiError, DashboardSummary, getAlerts, getAnalytics, getSummary } from "@/lib/api";
 import { AnalyticsCharts } from "@/components/analytics-charts";
 import { SeverityBadge } from "@/components/severity-badge";
+import { ActivityIcon, ArrowUpRightIcon, BellIcon, ServerIcon } from "@/components/ui/icons";
+import { EmptyState, KpiCard, Notice, PageHeader, PageShell, Panel, StatusPill } from "@/components/ui/primitives";
 
 function formatDate(value: string) {
-  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+  return new Intl.DateTimeFormat("vi-VN", { dateStyle: "short", timeStyle: "short" }).format(new Date(value));
 }
 
 function formatNumber(value: number) {
-  return new Intl.NumberFormat().format(value);
+  return new Intl.NumberFormat("vi-VN").format(value);
 }
 
 export default function Home() {
@@ -20,7 +22,6 @@ export default function Home() {
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
-  const today = new Intl.DateTimeFormat(undefined, { dateStyle: "full" }).format(new Date());
 
   useEffect(() => {
     let active = true;
@@ -29,13 +30,14 @@ export default function Home() {
         .then(([nextSummary, nextAlerts, nextAnalytics]) => {
           if (!active) return;
           setSummary(nextSummary);
-          setAlerts(nextAlerts.slice(0, 4));
+          setAlerts(nextAlerts.slice(0, 6));
           setAnalytics(nextAnalytics);
+          setError("");
         })
         .catch((reason: unknown) => {
           if (!active) return;
-          if (reason instanceof ApiError && reason.status === 401) setError("Sign in to view live security data.");
-          else setError("The security data could not be loaded.");
+          if (reason instanceof ApiError && reason.status === 401) setError("Vui lòng đăng nhập để xem dữ liệu an ninh trực tiếp.");
+          else setError("Không thể tải dữ liệu an ninh từ máy chủ API.");
         })
         .finally(() => {
           if (active) setLoading(false);
@@ -51,70 +53,125 @@ export default function Home() {
   }, []);
 
   return (
-    <main className="shell">
-      <section className="content">
-        <p className="eyebrow" suppressHydrationWarning>
-          {today}
-        </p>
-        <div className="dashboard-title-row"><h1>Security Command Center</h1><span className="live-readout"><span className="pulse-dot" /> Auto-refresh 5s</span></div>
-        <p className="lede">Theo dõi liên tục các chỉ số an ninh, tín hiệu đe dọa GeoIP và bức tranh tổng quan sự cố SOC.</p>
+    <PageShell>
+      <PageHeader
+        title="Security Command Center"
+        description="Giám sát chỉ số an ninh thời gian thực, tín hiệu đe dọa GeoIP và hàng đợi cảnh báo SOC."
+        actions={
+          <StatusPill tone="success">
+            <span className="soc-pulse h-1.5 w-1.5 rounded-full bg-emerald-400" />
+            Auto-refresh 5s
+          </StatusPill>
+        }
+      />
 
-        {error && (
-          <div className="notice mb-6">
-            {error} <Link href="/login">Đăng nhập ngay</Link>
+      {error && (
+        <Notice tone="error">
+          {error}{" "}
+          <Link href="/login" className="font-semibold underline underline-offset-2">
+            Đăng nhập ngay
+          </Link>
+        </Notice>
+      )}
+
+      {/* KPI Strip */}
+      <section className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <KpiCard
+          label="Cảnh báo đang mở"
+          value={loading ? "—" : formatNumber(summary?.open_alerts ?? 0)}
+          subtext="Hàng đợi cần xử lý"
+          tone={(summary?.open_alerts ?? 0) > 0 ? "critical" : "default"}
+          icon={<BellIcon size={16} />}
+        />
+        <KpiCard
+          label="Sự kiện đã xử lý"
+          value={loading ? "—" : formatNumber(summary?.events_processed ?? 0)}
+          subtext="Log đã chuẩn hóa & lập chỉ mục"
+          tone="accent"
+          icon={<ActivityIcon size={16} />}
+        />
+        <KpiCard
+          label="Tài sản đang kết nối"
+          value={loading ? "—" : formatNumber(summary?.connected_assets ?? 0)}
+          subtext="Node đang gửi telemetry"
+          tone="success"
+          icon={<ServerIcon size={16} />}
+        />
+      </section>
+
+      {/* Analytics Charts */}
+      <AnalyticsCharts data={analytics} />
+
+      {/* Priority Alerts Queue */}
+      <Panel
+        title="Hàng đợi cảnh báo ưu tiên"
+        subtitle="Các cảnh báo mới nhất cần chuyên viên SOC kiểm tra"
+        actions={
+          <Link
+            href="/alerts"
+            className="inline-flex items-center gap-1 font-mono text-xs font-medium text-accent transition-colors hover:text-accent-hover"
+          >
+            Xem tất cả <ArrowUpRightIcon size={14} />
+          </Link>
+        }
+        noPadding
+      >
+        {loading ? (
+          <div className="p-8 text-center font-mono text-xs text-faint">Đang tải cảnh báo...</div>
+        ) : alerts.length === 0 ? (
+          <EmptyState
+            title="Chưa có cảnh báo nào được kích hoạt"
+            description="Hệ thống sẽ tự động hiển thị cảnh báo ngay khi quy tắc phát hiện khớp với log."
+            icon={<BellIcon size={18} />}
+          />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead>
+                <tr className="border-b border-border bg-surface-raised/60 font-mono text-[11px] uppercase tracking-wider text-muted">
+                  <th className="px-5 py-3">Mức độ</th>
+                  <th className="px-4 py-3">Nội dung cảnh báo</th>
+                  <th className="px-4 py-3">Trạng thái</th>
+                  <th className="px-5 py-3 text-right">Thời gian</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {alerts.map((alert) => (
+                  <tr key={alert.alert_id} className="transition-colors hover:bg-surface-hover/60">
+                    <td className="px-5 py-3 whitespace-nowrap">
+                      <SeverityBadge severity={alert.severity} />
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-medium text-ink">{alert.summary}</span>
+                        {alert.occurrences && alert.occurrences > 1 ? (
+                          <StatusPill tone="accent">{alert.occurrences}x gom cụm</StatusPill>
+                        ) : null}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      <StatusPill
+                        tone={
+                          alert.status === "closed"
+                            ? "success"
+                            : alert.status === "acknowledged"
+                            ? "warning"
+                            : "neutral"
+                        }
+                      >
+                        {alert.status}
+                      </StatusPill>
+                    </td>
+                    <td className="px-5 py-3 text-right font-mono text-muted whitespace-nowrap tabular-nums">
+                      {formatDate(alert.triggered_at)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
-
-        <div className="metrics">
-          <article>
-            <span>Open Alerts</span>
-            <strong>{loading ? "-" : formatNumber(summary?.open_alerts ?? 0)}</strong>
-            <small className="red">Current Queue</small>
-          </article>
-          <article>
-            <span>Events Processed</span>
-            <strong>{loading ? "-" : formatNumber(summary?.events_processed ?? 0)}</strong>
-            <small>Indexed Log Events</small>
-          </article>
-          <article>
-            <span>Connected Assets</span>
-            <strong>{loading ? "-" : formatNumber(summary?.connected_assets ?? 0)}</strong>
-            <small className="green">Reporting Nodes</small>
-          </article>
-        </div>
-
-        {/* Analytics Charts Component (Mục 6: Event Velocity, Severity & GeoIP Threat Matrix) */}
-        <AnalyticsCharts data={analytics} />
-
-        {/* Priority Alerts Queue */}
-        <section className="panel mt-12">
-          <div className="panel-heading">
-            <div>
-              <p className="eyebrow">Priority Queue</p>
-              <h2>Recent Alerts</h2>
-            </div>
-            <Link href="/alerts">
-              View all alerts <span>-&gt;</span>
-            </Link>
-          </div>
-
-          {loading && <p className="empty-state">Loading alerts...</p>}
-          {!loading && !alerts.length && <p className="empty-state">No alerts have been triggered.</p>}
-          {alerts.map((alert) => (
-            <div className="alert-row" key={alert.alert_id}>
-              <SeverityBadge severity={alert.severity} />
-              <div>
-                <strong>{alert.summary}</strong>
-                <small>
-                  {formatDate(alert.triggered_at)} · Status: {alert.status}{" "}
-                  {alert.occurrences && alert.occurrences > 1 ? `· ⚡ ${alert.occurrences}x aggregated` : ""}
-                </small>
-              </div>
-              <span className="arrow">-&gt;</span>
-            </div>
-          ))}
-        </section>
-      </section>
-    </main>
+      </Panel>
+    </PageShell>
   );
 }

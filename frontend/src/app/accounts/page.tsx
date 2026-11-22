@@ -1,7 +1,6 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
-import Link from "next/link";
 import {
   ApiError,
   createUser as createUserRequest,
@@ -10,10 +9,12 @@ import {
   login as loginRequest,
   User,
 } from "@/lib/api";
+import { LockIcon, UsersIcon } from "@/components/ui/icons";
+import { Button, EmptyState, Notice, PageHeader, PageShell, Panel, StatusPill } from "@/components/ui/primitives";
 
 export default function AccountsPage() {
   const [users, setUsers] = useState<User[]>([]);
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useState<{ text: string; tone: "error" | "success" } | null>(null);
   const [form, setForm] = useState({ email: "", password: "", displayName: "", role: "viewer" });
   const [loginForm, setLoginForm] = useState({ email: "admin@example.com", password: "admin" });
   const [loggedIn, setLoggedIn] = useState(
@@ -23,14 +24,14 @@ export default function AccountsPage() {
   async function loadUsers() {
     try {
       setUsers(await getUsers());
-      setMessage("");
+      setMessage(null);
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
-        setMessage("Bạn cần đăng nhập với quyền Admin để truy cập danh sách tài khoản.");
+        setMessage({ tone: "error", text: "Bạn cần đăng nhập quyền Admin để xem danh sách tài khoản." });
       } else if (error instanceof ApiError && error.status === 403) {
-        setMessage("Chỉ tài khoản Admin mới có quyền xem và quản lý danh sách người dùng.");
+        setMessage({ tone: "error", text: "Chỉ tài khoản Admin mới có quyền quản lý người dùng." });
       } else {
-        setMessage("Không thể tải danh sách tài khoản.");
+        setMessage({ tone: "error", text: "Không thể tải danh sách tài khoản." });
       }
     }
   }
@@ -49,7 +50,7 @@ export default function AccountsPage() {
       setLoggedIn(true);
       await loadUsers();
     } catch {
-      setMessage("Email hoặc mật khẩu không đúng hoặc API không khả dụng.");
+      setMessage({ tone: "error", text: "Email hoặc mật khẩu không đúng hoặc API chưa sẵn sàng." });
     }
   }
 
@@ -62,12 +63,12 @@ export default function AccountsPage() {
         display_name: form.displayName,
         role: form.role as User["role"],
       });
-      setMessage("Đã tạo tài khoản thành công.");
+      setMessage({ tone: "success", text: "Đã tạo tài khoản SOC mới thành công." });
       setForm({ email: "", password: "", displayName: "", role: "viewer" });
       await loadUsers();
     } catch (err: unknown) {
       const errMsg = err instanceof ApiError ? err.message : "Không thể tạo tài khoản.";
-      setMessage(`Tạo tài khoản thất bại: ${errMsg}`);
+      setMessage({ tone: "error", text: `Tạo tài khoản thất bại: ${errMsg}` });
     }
   }
 
@@ -77,120 +78,175 @@ export default function AccountsPage() {
       await disableUserRequest(id);
       await loadUsers();
     } catch {
-      setMessage("Không thể vô hiệu hóa tài khoản. Yêu cầu quyền Admin.");
+      setMessage({ tone: "error", text: "Không thể vô hiệu hóa tài khoản. Yêu cầu quyền Admin." });
     }
   }
 
   return (
-    <main className="account-shell">
-      <header className="account-header">
-        <Link href="/">← Overview</Link>
-        <span className="eyebrow">Administration & RBAC</span>
-        <h1>SOC Accounts & Access</h1>
-        <p>Quản lý danh sách đội ngũ SOC, phân quyền vai trò (Admin, Analyst, Viewer) và kiểm soát truy cập hệ thống.</p>
-      </header>
+    <PageShell>
+      <PageHeader
+        title="SOC Accounts & RBAC"
+        description="Quản lý thành viên đội ngũ SOC, phân quyền vai trò Admin / Analyst / Viewer và kiểm soát truy cập."
+        badge={loggedIn ? <StatusPill tone="neutral">{users.length} tài khoản</StatusPill> : undefined}
+      />
+
+      {message && (
+        <Notice tone={message.tone} onDismiss={() => setMessage(null)}>
+          {message.text}
+        </Notice>
+      )}
 
       {!loggedIn ? (
-        <form className="account-form login-form max-w-md" onSubmit={login}>
-          <h2>Sign in for Management</h2>
-          <label>
-            Email
-            <input
-              required
-              type="email"
-              value={loginForm.email}
-              onChange={(event) => setLoginForm({ ...loginForm, email: event.target.value })}
-            />
-          </label>
-          <label>
-            Password
-            <input
-              required
-              type="password"
-              value={loginForm.password}
-              onChange={(event) => setLoginForm({ ...loginForm, password: event.target.value })}
-            />
-          </label>
-          <button type="submit">Sign in</button>
-          {message && <small className="notice block">{message}</small>}
-        </form>
-      ) : (
-        <section className="account-grid">
-          <form className="account-form" onSubmit={createUser}>
-            <h2>Tạo tài khoản mới</h2>
-            <label>
-              Email
-              <input
-                required
-                type="email"
-                placeholder="user@example.com"
-                value={form.email}
-                onChange={(event) => setForm({ ...form, email: event.target.value })}
-              />
-            </label>
-            <label>
-              Tên hiển thị (Display Name)
-              <input
-                placeholder="Nguyễn Văn A"
-                value={form.displayName}
-                onChange={(event) => setForm({ ...form, displayName: event.target.value })}
-              />
-            </label>
-            <label>
-              Mật khẩu tạm thời
-              <input
-                required
-                minLength={4}
-                type="password"
-                value={form.password}
-                onChange={(event) => setForm({ ...form, password: event.target.value })}
-              />
-            </label>
-            <label>
-              Vai trò SOC (RBAC Role)
-              <select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value })}>
-                <option value="viewer">👁️ Viewer · Chỉ xem log & báo cáo</option>
-                <option value="analyst">🔍 Analyst · Điều tra & Cập nhật Alert</option>
-                <option value="admin">👑 Admin · Toàn quyền quản trị</option>
-              </select>
-            </label>
-            <button type="submit">Thêm người dùng</button>
-            {message && <small className="notice block">{message}</small>}
-          </form>
-
-          <section className="account-list">
-            <div className="list-heading">
-              <h2>Đội ngũ SOC ({users.length})</h2>
-            </div>
-            {!users.length && <p className="empty-state">Chưa có thông tin hoặc không có quyền xem.</p>}
-            {users.map((user) => (
-              <div className="user-row" key={user.user_id}>
-                <div>
-                  <strong>{user.display_name || user.email}</strong>
-                  <small>{user.email}</small>
-                </div>
-                <span
-                  className={`role-badge ${
-                    user.role === "admin"
-                      ? "badge-admin"
-                      : user.role === "analyst"
-                      ? "badge-analyst"
-                      : "badge-viewer"
-                  }`}
-                >
-                  {user.role === "admin" ? "👑 ADMIN" : user.role === "analyst" ? "🔍 ANALYST" : "👁️ VIEWER"}
-                </span>
-                <span>{user.enabled ? "Hoạt động" : "Đã khóa"}</span>
-                {user.enabled && (
-                  <button className="disable" onClick={() => void disableUser(user.user_id)} title="Disable account">
-                    Khóa
-                  </button>
-                )}
+        <div className="max-w-md">
+          <Panel title="Đăng nhập quyền quản trị">
+            <form className="space-y-4" onSubmit={login}>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-ink-secondary">Email</label>
+                <input
+                  className="soc-input"
+                  required
+                  type="email"
+                  value={loginForm.email}
+                  onChange={(event) => setLoginForm({ ...loginForm, email: event.target.value })}
+                />
               </div>
-            ))}
-          </section>
-        </section>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-ink-secondary">Mật khẩu</label>
+                <input
+                  className="soc-input"
+                  required
+                  type="password"
+                  value={loginForm.password}
+                  onChange={(event) => setLoginForm({ ...loginForm, password: event.target.value })}
+                />
+              </div>
+              <Button type="submit" variant="primary" className="w-full">
+                Đăng nhập
+              </Button>
+            </form>
+          </Panel>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
+          {/* Left: Create User Form */}
+          <div className="lg:col-span-4">
+            <Panel title="Tạo tài khoản mới">
+              <form className="space-y-3.5" onSubmit={createUser}>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-ink-secondary">Email</label>
+                  <input
+                    className="soc-input"
+                    required
+                    type="email"
+                    placeholder="user@example.com"
+                    value={form.email}
+                    onChange={(event) => setForm({ ...form, email: event.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-ink-secondary">Tên hiển thị</label>
+                  <input
+                    className="soc-input"
+                    placeholder="Nguyễn Văn A"
+                    value={form.displayName}
+                    onChange={(event) => setForm({ ...form, displayName: event.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-ink-secondary">Mật khẩu tạm thời</label>
+                  <input
+                    className="soc-input"
+                    required
+                    minLength={4}
+                    type="password"
+                    value={form.password}
+                    onChange={(event) => setForm({ ...form, password: event.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-ink-secondary">Vai trò RBAC</label>
+                  <select
+                    className="soc-select"
+                    value={form.role}
+                    onChange={(event) => setForm({ ...form, role: event.target.value })}
+                  >
+                    <option value="viewer">Viewer · Chỉ xem log & báo cáo</option>
+                    <option value="analyst">Analyst · Điều tra & xử lý Alert</option>
+                    <option value="admin">Admin · Toàn quyền quản trị</option>
+                  </select>
+                </div>
+                <Button type="submit" variant="primary" className="w-full">
+                  Thêm người dùng
+                </Button>
+              </form>
+            </Panel>
+          </div>
+
+          {/* Right: User Table */}
+          <div className="lg:col-span-8">
+            <Panel title={`Đội ngũ SOC (${users.length})`} noPadding>
+              {users.length === 0 ? (
+                <EmptyState
+                  title="Chưa có dữ liệu tài khoản"
+                  description="Tài khoản hiện tại có thể chưa có quyền Admin hoặc danh sách đang trống."
+                  icon={<UsersIcon size={18} />}
+                />
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="border-b border-border bg-surface-raised/60 font-mono text-[11px] uppercase tracking-wider text-muted">
+                        <th className="px-5 py-3">Thành viên</th>
+                        <th className="px-4 py-3">Vai trò</th>
+                        <th className="px-4 py-3">Trạng thái</th>
+                        <th className="px-5 py-3 text-right">Thao tác</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {users.map((user) => {
+                        const roleTone =
+                          user.role === "admin"
+                            ? "danger"
+                            : user.role === "analyst"
+                            ? "warning"
+                            : "accent";
+                        return (
+                          <tr key={user.user_id} className="transition-colors hover:bg-surface-hover/60">
+                            <td className="px-5 py-3.5">
+                              <p className="font-medium text-ink">{user.display_name || user.email}</p>
+                              <p className="font-mono text-[11px] text-faint">{user.email}</p>
+                            </td>
+                            <td className="px-4 py-3.5 whitespace-nowrap">
+                              <StatusPill tone={roleTone}>{user.role.toUpperCase()}</StatusPill>
+                            </td>
+                            <td className="px-4 py-3.5 whitespace-nowrap">
+                              <StatusPill tone={user.enabled ? "success" : "neutral"}>
+                                {user.enabled ? "Hoạt động" : "Đã khóa"}
+                              </StatusPill>
+                            </td>
+                            <td className="px-5 py-3.5 text-right whitespace-nowrap">
+                              {user.enabled && (
+                                <Button
+                                  variant="danger"
+                                  size="sm"
+                                  onClick={() => void disableUser(user.user_id)}
+                                  title="Vô hiệu hóa tài khoản"
+                                >
+                                  <LockIcon size={12} /> Khóa
+                                </Button>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </Panel>
+          </div>
+        </div>
       )}
-    </main>
+    </PageShell>
   );
 }
